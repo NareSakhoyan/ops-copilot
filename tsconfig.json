@@ -19,6 +19,6 @@
     "skipLibCheck": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "evals/**/*.ts", "vitest.config.ts"],
+  "include": ["src/**/*.ts", "tests/**/*.ts", "evals/**/*.ts", "vitest.config.ts", "drizzle.config.ts"],
   "exclude": ["node_modules", "dist", "coverage"]
 }

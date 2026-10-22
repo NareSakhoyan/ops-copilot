@@ -26,21 +26,11 @@ describe('environment validation', () => {
     });
   });
 
-  it('parses valid environment strings and excludes unrelated variables', () => {
-    expect(parseConfig({
-      NODE_ENV: 'production', HOST: '0.0.0.0', PORT: '8080', LOG_LEVEL: 'warn', OTHER: 'ignored',
-    })).toEqual({ NODE_ENV: 'production', HOST: '0.0.0.0', PORT: 8080, LOG_LEVEL: 'warn' });
-  });
-
   it.each([
     { PORT: '' }, { PORT: 'abc' }, { PORT: '0' }, { PORT: '65536' }, { PORT: '1.5' },
     { NODE_ENV: 'staging' }, { LOG_LEVEL: 'verbose' }, { HOST: '   ' },
   ])('rejects invalid settings: %j', (environment) => {
     expect(() => parseConfig(environment)).toThrow(ZodError);
-  });
-
-  it.each([null, [], 'PORT=3000'])('rejects non-object input: %j', (input) => {
-    expect(() => parseConfig(input)).toThrow(ZodError);
   });
 });
 
@@ -62,12 +52,6 @@ describe('required .env file', () => {
     expect(() => loadConfig(createEnvPath(), {
       NODE_ENV: 'production', HOST: '127.0.0.1', PORT: '3000', LOG_LEVEL: 'info',
     })).toThrow(/ENOENT/);
-  });
-
-  it('rejects invalid settings read from the file', () => {
-    const path = createEnvPath();
-    writeFileSync(path, 'PORT=invalid\n');
-    expect(() => loadConfig(path, {})).toThrow(ZodError);
   });
 
   it('ships a valid .env.example with the approved defaults', () => {

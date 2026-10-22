@@ -1,0 +1,36 @@
+ALTER TABLE "activities" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "companies" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "contacts" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "deals" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "leads" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "tasks" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "permissions" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "role_permissions" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "roles" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "user_roles" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "users" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "order_items" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "orders" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "products" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "audit_logs" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "refresh_tokens" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "departments" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "employees" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+CREATE POLICY "activities_tenant_isolation" ON "activities" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("activities"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("activities"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "companies_tenant_isolation" ON "companies" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("companies"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("companies"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "contacts_tenant_isolation" ON "contacts" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("contacts"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("contacts"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "deals_tenant_isolation" ON "deals" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("deals"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("deals"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "leads_tenant_isolation" ON "leads" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("leads"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("leads"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "tasks_tenant_isolation" ON "tasks" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("tasks"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("tasks"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "permissions_tenant_isolation" ON "permissions" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("permissions"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("permissions"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "role_permissions_tenant_isolation" ON "role_permissions" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("role_permissions"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("role_permissions"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "roles_tenant_isolation" ON "roles" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("roles"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("roles"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "user_roles_tenant_isolation" ON "user_roles" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("user_roles"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("user_roles"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "users_tenant_isolation" ON "users" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("users"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("users"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "order_items_tenant_isolation" ON "order_items" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("order_items"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("order_items"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "orders_tenant_isolation" ON "orders" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("orders"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("orders"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "products_tenant_isolation" ON "products" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("products"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("products"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "audit_logs_tenant_isolation" ON "audit_logs" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("audit_logs"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("audit_logs"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "refresh_tokens_tenant_isolation" ON "refresh_tokens" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("refresh_tokens"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("refresh_tokens"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "departments_tenant_isolation" ON "departments" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("departments"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("departments"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);--> statement-breakpoint
+CREATE POLICY "employees_tenant_isolation" ON "employees" AS PERMISSIVE FOR ALL TO "analytics_ro", "app_user" USING ("employees"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK ("employees"."tenant_id" = nullif(current_setting('app.tenant_id', true), '')::uuid);

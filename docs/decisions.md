@@ -20,6 +20,10 @@ A `.env` file must exist. Include a local `.env` and a matching `.env.example`; 
 
 `GET /health` returns HTTP 200 and `{"status":"ok"}`. Generate request UUIDs on the server, include them in pino request logs as `reqId`, and return them in the `X-Request-ID` response header. Client headers do not set request IDs.
 
+## Development log display
+
+Pipe `npm run dev` output through the `pino-pretty` CLI, installed as a development dependency. Color severity labels, display local timestamps, and omit PID/hostname from the terminal display while retaining request IDs and event details. Keep application logging as structured Pino JSON, including production `npm start` output and captured test logs. Format the existing redacted records without adding request bodies, tokens, raw database errors, or a second logger implementation.
+
 ## Application foundation
 
 The project is named `ops-copilot`. Use Fastify, strict TypeScript without `any`, Zod for external input and environment validation, pino for logging with a request ID per request, Vitest for tests, and ESLint for linting. Provide `GET /health`.
@@ -43,3 +47,65 @@ Use Husky to run lint-staged before commits. The npm `prepare` lifecycle install
 ## Cleanup
 
 Keep files and configuration relevant to this Node.js/Fastify project. Remove the unrelated Next.js snippet documents, unused Vitest mock settings, and the redundant `noImplicitAny` setting already enabled by `strict`. Preserve the requested scaffold directories and tests for existing behavior.
+
+## Database foundation
+
+Use `pgvector/pgvector:pg18` in Docker Compose, Drizzle ORM with node-postgres (`pg`), and Drizzle Kit to generate committed SQL migrations. Test against disposable PostgreSQL 18 pgvector containers using Testcontainers. Store PostgreSQL 18 data under `/var/lib/postgresql`. Local credentials live in the required `.env`, with development examples in `.env.example`.
+
+## Database ownership and bootstrap
+
+The local image's bootstrap superuser is `migration_owner`. Only migration tooling uses `MIGRATION_DATABASE_URL`; application access is intended to use the separate restricted `app_user`. Bootstrap SQL only enables vector, creates `app_user` and `analytics_ro`, grants role membership, and configures the migration owner's future table DML grants to `app_user`. Do not provision an application password, add analytics SELECT grants, seed data, create tables, or add RLS in bootstrap. Run the currently empty Drizzle SQL grants step after migrations.
+
+## Tenant-scoped CRM schema
+
+Every business table other than `tenants` is tenant-scoped, including application users, roles, and permissions. Use UUID primary keys, a unique `(tenant_id, id)` on each tenant table, and explicit composite foreign keys for references to tenant-scoped rows. Natural identifiers and RBAC memberships are unique within a tenant. Keep default restrictive deletion behavior rather than cascading business-record deletion.
+
+## Minimal CRM relationships and constraints
+
+Employees may optionally link to one login and one department; contacts may optionally link to a company. Leads and deals may link to a company, contact, and responsible employee, and deals may link to a lead. Activities require a contact and may link to a deal and employee. Tasks require a description, deadline, and assignee, with optional contact and deal links. Orders may link to a company, contact, and deal; order items require an order and product. Audit actor and entity IDs may be absent for system events; polymorphic audit entity IDs have no foreign key. Refresh tokens require a tenant-scoped user, a token hash, and an expiration time.
+
+Deal status values are `open`, `won`, and `lost`; task status values are `todo`, `in_progress`, `done`, and `cancelled`. Activity types are `call`, `email`, and `meeting`. Use SQL CHECK constraints rather than PostgreSQL enum types. Do not add lead/order workflow statuses. Derive overdue tasks from `due_at` and unfinished status. Monetary amounts use nonnegative `numeric(14,2)` plus an uppercase three-letter currency code; order quantities are positive integers. Timestamps use `timestamptz` with creation defaults and Drizzle-managed `updated_at` updates; raw SQL writers must set `updated_at` explicitly.
+
+## Initial migration lifecycle
+
+Generate the initial schema into `drizzle/`; apply migrations as the owner, then execute `src/db/grants.ts`. The initial migration has no destructive down script: use forward migrations for subsequent changes. Disposable test databases may be removed; persistent development databases must not be reset automatically. RLS, AI tables, authentication flows, and the assignment's synthetic-data generator are outside this database change.
+
+## Tenant row-level security
+
+The next migration enables RLS on all 18 tenant-scoped tables, superseding the initial database stage's RLS deferral. Use the installed Drizzle 0.45 API: `pgRole(...).existing()`, `pgPolicy`, and `.enableRLS()`. Bootstrap roles remain managed by `docker/init.sql`, and the initial migration stays unchanged. Each tenant table has one `FOR ALL` policy naming `app_user` and `analytics_ro`, with identical USING/WITH CHECK predicates. Command permissions remain separate: `app_user` has table DML, while `analytics_ro` must receive only explicit SELECT grants before analytical access is enabled. This change does not broaden analytics table privileges.
+
+Compare `tenant_id` to `NULLIF(current_setting('app.tenant_id', true), '')::uuid`. Missing settings and PostgreSQL's empty-string reset state both become NULL, yielding no visible rows and rejecting writes. `NULLIF` is required for safe connection reuse after transaction-local settings reset.
+
+## Application database context and credentials
+
+Use a separate, Zod-validated `DATABASE_URL` that names `app_user`; reject query-string `user` overrides and never fall back to `MIGRATION_DATABASE_URL`. Provision the app login password through the owner's interactive `psql \password` command, outside the intentionally limited bootstrap SQL, and keep it in the local environment. The default pool is created lazily on first tenant operation and closed with Fastify. A small client factory supports isolated pools in tests.
+
+`withTenant(ctx, fn)` accepts server-side UUID `tenant_id` and `user_id`, validates them, and opens one Drizzle transaction. Parameterized `set_config` calls install both IDs transaction-locally before the callback runs. Successful callbacks commit; failures roll back and reset context. The application role is neither the owner nor a superuser and has no BYPASSRLS, so ordinary ENABLE ROW LEVEL SECURITY applies without FORCE. This boundary does not replace JWT authentication, RBAC, or deterministic SQL validation.
+
+## Authentication contracts and credential lookup
+
+Use Argon2 password verification, `jose` for JWTs, and `@fastify/rate-limit` for login throttling. Login accepts `{ tenantId, email, password }`; refresh/logout accept `{ tenantId, refreshToken }`. Tokens are returned as JSON and access tokens are sent using Bearer authorization. Do not introduce cookies or browser token storage in this API change. The supplied tenant ID is a credential-lookup selector, not an authenticated context. Keep RLS enabled and use `app_user` in a tenant-only transaction with an empty user setting until credentials resolve to a database user; never invent a user UUID or use owner credentials for authentication.
+
+## Access tokens and request context
+
+Sign HS256 JWTs with a required environment secret of at least 32 characters, an issuer, an audience, and a 15-minute expiry. Defaults are issuer `ops-copilot` and audience `ops-copilot-api`; accept only HS256 and validate required claims. Include `tenantId`, `userId`, and role names from the database. The shared Fastify preHandler validates the JWT, verifies the user still exists, and reloads roles, permissions, employee, and department from PostgreSQL on every authenticated request. JWT role claims are informational snapshots, not the authorization authority. Request IDs remain server-generated. Preserve lazy database connection creation so `/health` needs no database access.
+
+## Refresh families and logout
+
+Generate 32-byte random base64url refresh tokens and store only SHA-256 hashes. Add `family_id` and `used_at` to existing token rows; retain consumed rows for reuse detection. Each login creates a family with a fixed seven-day lifetime; rotations inherit that expiry. Serialize refresh/logout per tenant and family with a PostgreSQL transaction advisory lock, then re-read/lock the token. Mark consumed tokens and insert replacements atomically. Reusing a consumed token revokes all family members and records an audit event; return the authentication error only after committing revocation. Logout revokes the presented token's family, including when an ancestor token is presented, and is idempotent. These operations do not revoke other sessions or immediately revoke existing access JWTs; those expire within 15 minutes. Simultaneous refresh attempts are treated as reuse and revoke the family.
+
+## RBAC and record scoping
+
+Permission checks require tenant-local database permission codes, with no implicit admin permission bypass. Roles determine record scope: admin covers the tenant, sales_manager covers employees in their department, sales_rep covers records assigned to their employee, and viewer supports tenant aggregates only. Use the broadest applicable scope when multiple roles are assigned. Unknown roles and missing required employee/department links fail closed. `can` rejects viewer row/action permissions even if accidentally assigned. Initial provisioning grants admins `deals:read`, `deals:aggregate`, `departments:read`, and `audit_logs:read`; managers get the first three; reps get the two deal permissions; viewers get only `deals:aggregate`. Audit-log listing requires both `audit_logs:read` and whole-tenant row scope, so it is admin-only for these roles. Query callers must check permission and apply the scope filter; only actual aggregate queries may request aggregate scope. Test-only routes demonstrate manager denial and deal filtering without adding unrequested production CRM endpoints.
+
+## Transactional auditing and API limits
+
+The audit writer receives the action's existing transaction and takes tenant, actor, and request ID from server context. Keep JSON metadata in the existing `details` JSONB column and add nullable `request_id` for historical/system compatibility. New request events require a UUID request ID; login, rotation, reuse revocation, and logout write their events inside the same transaction as session changes. Failed credential checks have no authenticated actor and remain HTTP request logs, not attributed database audit events. Audit listing has deterministic ordering and bounded limit/offset pagination. Login is limited to five attempts per minute per connection IP using an in-memory limiter; forwarded IP headers are not trusted. Redact authorization/cookie/token/password logging fields, avoid logging bodies or raw database errors, and return generic credential and internal-error messages. Keep bootstrap SQL and analytics grants unchanged.
+
+## Shared database test setup
+
+Share PostgreSQL container bootstrap and migration CLI execution through two functions in `tests/helpers/database.ts`. Each integration suite keeps its own disposable container, connections, fixtures, and cleanup. Run migrations explicitly so the database suite can still inspect the empty database and verify repeated migration runs. Keep the RLS suite's single-connection application pool for deterministic connection-reuse checks.
+
+## Test scope and duplication
+
+Keep tests focused on application behavior and security boundaries. Remove standalone environment-parser non-object checks, successful URL pass-through assertions already exercised by real database connections, and repeated file-validation assertions covered by server startup tests. Consolidate RLS metadata assertions in the RLS suite, including the unscoped root tenant table; retain exact schema inventory checks in migration tests. Preserve credential, permission, isolation, token lifecycle, transaction, and startup failure coverage.

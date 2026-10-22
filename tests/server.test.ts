@@ -19,6 +19,7 @@ describe('server startup', () => {
   it.each([
     { name: 'missing .env', content: undefined, reason: 'ENOENT' },
     { name: 'invalid configuration', content: 'PORT=invalid\n', reason: 'ZodError' },
+    { name: 'missing signing secret', content: 'PORT=3000\n', reason: 'ZodError' },
   ])('exits with an error for $name', ({ content, reason }) => {
     const directory = mkdtempSync(join(tmpdir(), 'ops-copilot-server-'));
     directories.push(directory);

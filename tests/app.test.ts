@@ -1,14 +1,18 @@
+import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { buildApp } from '../src/app.js';
 import { parseConfig } from '../src/config.js';
+import { parseAuthConfig } from '../src/auth/config.js';
 
 const applications: ReturnType<typeof buildApp>[] = [];
+const authConfig = parseAuthConfig({ JWT_SECRET: randomBytes(32).toString('hex') });
 
 function createApp(level = 'silent', logs?: string[]) {
   const app = buildApp(
     parseConfig({ NODE_ENV: 'test', LOG_LEVEL: level }),
     logs === undefined ? undefined : { write: (line: string) => { logs.push(line); } },
+    { authConfig },
   );
   applications.push(app);
   return app;

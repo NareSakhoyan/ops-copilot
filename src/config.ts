@@ -16,11 +16,18 @@ export function parseConfig(input: unknown): AppConfig {
   return configSchema.parse(input);
 }
 
+export function loadEnvironment(
+  envPath = resolve(process.cwd(), '.env'),
+  environment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  // Reading unconditionally ensures .env is required even when process variables exist.
+  const fileEnvironment = parseEnv(readFileSync(envPath, 'utf8'));
+  return { ...fileEnvironment, ...environment };
+}
+
 export function loadConfig(
   envPath = resolve(process.cwd(), '.env'),
   environment: NodeJS.ProcessEnv = process.env,
 ): AppConfig {
-  // Reading unconditionally ensures .env is required even when process variables exist.
-  const fileEnvironment = parseEnv(readFileSync(envPath, 'utf8'));
-  return parseConfig({ ...fileEnvironment, ...environment });
+  return parseConfig(loadEnvironment(envPath, environment));
 }
