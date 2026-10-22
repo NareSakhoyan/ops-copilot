@@ -10,6 +10,7 @@ import type { RequestContext } from './context.js';
 import { can, recordScope } from './rbac.js';
 import { AuthenticationError, createAuthService } from './service.js';
 import { verifyAccessToken } from './tokens.js';
+import { HttpError } from '../routes/errors.js';
 
 declare module 'fastify' {
   interface FastifyRequest { context: RequestContext }
@@ -39,6 +40,7 @@ export function registerAuth(app: FastifyInstance, database: TenantDatabase, con
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof z.ZodError) return reply.code(400).send({ error: 'Invalid request' });
     if (error instanceof AuthenticationError) return reply.code(401).send({ error: error.message });
+    if (error instanceof HttpError) return reply.code(error.statusCode).send({ error: error.message });
     const clientError = z.object({ statusCode: z.number().int().min(400).max(499) }).safeParse(error);
     if (clientError.success) {
       const status = clientError.data.statusCode;

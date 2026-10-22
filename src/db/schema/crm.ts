@@ -83,6 +83,7 @@ export const activities = pgTable('activities', {
 
 export const tasks = pgTable('tasks', {
   ...tenantColumns(),
+  title: text('title'),
   description: text('description').notNull(),
   assigneeEmployeeId: uuid('assignee_employee_id').notNull(),
   dueAt: timestamp('due_at', { withTimezone: true }).notNull(),

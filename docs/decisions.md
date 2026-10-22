@@ -109,3 +109,53 @@ Share PostgreSQL container bootstrap and migration CLI execution through two fun
 ## Test scope and duplication
 
 Keep tests focused on application behavior and security boundaries. Remove standalone environment-parser non-object checks, successful URL pass-through assertions already exercised by real database connections, and repeated file-validation assertions covered by server startup tests. Consolidate RLS metadata assertions in the RLS suite, including the unscoped root tenant table; retain exact schema inventory checks in migration tests. Preserve credential, permission, isolation, token lifecycle, transaction, and startup failure coverage.
+
+## Approval workflow MVP scope
+
+Keep mock Bitrix operations inside the existing Fastify app and reuse CRM tables. Do not add a separate app, container, database, `bitrix_` tables, workers, queues, or dependencies. Support only `task.create` proposals with title, description, assignee, and deadline. Reuse the existing audit writer for each state transition in the same transaction as that transition. Mock task writes must not provide a way to bypass approval.
+
+## Approval authorization
+
+Use tenant-local `tasks:create`, `approvals:read`, and `approvals:decide` permissions for admins, sales managers, and sales reps. Viewers cannot create or decide actions. An approver must additionally be the requester, a sales manager in the requester's department, or a tenant admin. Enforce tenant and assignment/department scope, and revalidate current permissions before execution. These rules are approved for subsequent service and route steps; this schema step does not provision permissions or implement authorization handlers.
+
+## Approval execution and idempotency
+
+Execute synchronously with atomic state changes: pending → approved → executing → executed or failed, with rejected and expired terminal alternatives. Claim execution through a Drizzle UPDATE guarded by `status = 'approved'`, returning the claimed row, so concurrent approvals cannot execute twice. Allow three total attempts, retrying only 5xx responses and timeouts with exponential backoff. Use the proposal's UUID as its idempotency key, not a payload hash: separately created identical proposals are allowed. Do not add a redundant `idempotency_key` column; the proposal primary key already supplies the unique UUID.
+
+## Approval database foundation — first step
+
+Add only `pending_actions` in this step, following existing UUID, tenant, timestamp, composite foreign-key, and RLS conventions. Store the requester user ID, action type, object JSONB payload, status, attempt count, nullable error/decision/execution timestamps, and required expiry defaulting to 24 hours after creation. Constrain type to `task.create`, status to the seven approved states, and attempts to 0–3. Keep only the primary-key and `(tenant_id, id)` constraint indexes for now. Field-level payload validation, authorization, audited state transitions, retry behavior, mock integration, and routes remain subsequent test-first steps. Verify this foundation against real Postgres, then stop for user review.
+
+## Approval services and decisions
+
+Complete the remaining workflow after the user's subsequent authorization. Proposal creation remains a service entry point for the future agent/tool, with no extra creation HTTP endpoint. Validate strict `{ type: 'task.create', payload: { title, description, assigneeEmployeeId, dueAt } }` input with Zod; trim title/description and normalize timezone-qualified deadlines to UTC. Derive requester identity from current server context and reload database permissions. Reps may assign themselves, managers their department, and admins any employee in the tenant.
+
+Lock each proposal while deciding. Approval and the guarded `approved` → `executing` claim commit together with both audit events; execution follows after commit. Concurrent/repeated approvals return the existing state when another caller already claimed or completed the action. Rejected actions return 409; expired actions return 410. Reject only pending actions, with repeated rejection returning the existing result. Expire pending/approved actions lazily on an authorized decision attempt, committing that transition before returning 410. Listing defaults to unexpired pending actions and supports bounded status/limit/offset filters within the caller's approval scope.
+
+## In-app mock task execution
+
+Use one CRM-backed mock service shared by the executor and `/rest/` routes, avoiding loopback HTTP, a second app, extra credentials, or new tables. Require an executing/executed proposal and matching normalized task fields before `tasks.task.add` can write or return a task. Use `tasks.id = pending_actions.id` for durable idempotency with existing UUID primary keys. Reload both contexts and validate both requester's and approver's task-creation/assignment permissions before claiming and immediately before insertion. This prevents managers from using a privileged requester's proposal to assign outside their own department. Audit task creation in the same transaction as the task insert. Existing-key repeats return the existing matching task without another insert or creation audit.
+
+Add a nullable `tasks.title` for legacy-record compatibility; newly created tasks always receive a validated nonempty title. Mock responses use the description as a display fallback for older null titles. Expose `crm.deal.list`, `crm.contact.list`, `tasks.task.add`, and `tasks.task.get` as authenticated POST methods under `/rest/`, with UUID identifiers and a documented minimal field set. Contact scope is derived from visible linked deals for managers/reps; admins may read tenant contacts. Add explicit `contacts:read` and `tasks:read` permissions for these new read methods. The data migration provisions these and the three approval/task-write permissions separately per existing tenant, granting them only to existing admin/sales_manager/sales_rep roles. New role/account provisioning must include the applicable grants; viewers never receive them automatically.
+
+## Retries, auditing, and limits
+
+Retry only typed HTTP 5xx/timeout failures, using three total attempts with 250/500 ms backoff. Other 4xx, permission/validation failures, and unexpected errors fail immediately. Record attempt/error updates and terminal transitions with the existing transactional audit writer; store only safe static failure messages. Failed actions are terminal and are not retried by another approval request. Independently proposed actions get new UUIDs and may execute even with identical payloads.
+
+No worker, queue, scheduler, or automatic crash recovery is introduced. A crash or final audit/commit failure can leave an action executing, possibly with its task already stored. A repeated approval does not take over that claim; manual inspection/recovery is required. The task's unique proposal UUID prevents duplicate inserts, but execution and task persistence span transactions and are not one distributed transaction.
+
+## Remove runtime failure simulation
+
+At the user's request, remove the mock failure environment flag, delayed/forced failures, and configuration tests. The in-app mock runs normally and still enforces validation, authorization, and approval checks. Preserve required executor retry, failure-auditing, and duplicate-prevention tests using test-only injected HTTP errors; no runtime failure simulator or mock-specific error class remains.
+
+## Deterministic development seed
+
+Use `@faker-js/faker` 10.6.0 as a development dependency; its installed `hy` locale supplies Armenian names with `en` fallback. Seed each tenant with a separate fixed Faker seed and stable tenant/admin UUIDs. Capture one reference time per run and use fixed relative date offsets, as confirmed by the user; keep normally salted Argon2 password hashes and generated audit request IDs. Keep generation, tenant inserts, and the command entry point under `src/db/seed/`; no extra seeding framework or schema migration is needed.
+
+Use `DATABASE_URL` as `app_user` and `withTenant` per tenant, including root tenant insertion, so the root and all dependent rows commit or roll back together. Skip a whole demo tenant when its UUID or name already exists, as confirmed by the user; do not overwrite existing data or refresh dates. A primary-key conflict also skips a concurrent run's tenant. A later tenant's failure does not undo an earlier committed tenant. The CLI refuses production mode because its known development passwords are public fixtures.
+
+Create exactly 12 employees/users per tenant: one admin, five managers, five reps, and one viewer, across two departments (admin has no department). This supplies the five managers required by the overdue-task scenario. Match existing tenant-local permission grants, including viewer aggregate-only access. Generate two order items per order with consistent AMD totals, yielding 9,336 rows including identities, memberships, tenants, and seed audit events.
+
+## Seeded analytics and untrusted content
+
+Plant exactly 20 recently lost deals with reasons and related cause notes, three managers with overdue unfinished tasks and two without, and ten contacts whose latest activity is 21–30 days old per tenant. Keep all other contacts recently active and other lost deals outside the 30-day window. At the user's confirmation, place the tenant-A prompt-injection fixture in an existing contact-linked activity note rather than adding a contact-note column. Store it as untrusted data; future agent defenses remain separate work. Document identifiers, credentials, reference dates, and expected results in `docs/seed-scenarios.md` and verify using real PostgreSQL as `app_user`.

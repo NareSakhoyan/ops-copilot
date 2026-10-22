@@ -12,7 +12,7 @@ Bootstrap grants table SELECT/INSERT/UPDATE/DELETE to `app_user`, not ownership,
 
 ## Policies
 
-All 18 tables containing `tenant_id` enable RLS in Drizzle using the installed 0.45 API's `.enableRLS()`. Existing PostgreSQL roles are declared with `pgRole('app_user').existing()` and the equivalent declaration for `analytics_ro`, so Drizzle does not recreate them.
+All 19 tables containing `tenant_id`, including `pending_actions`, enable RLS in Drizzle using the installed 0.45 API's `.enableRLS()`. Existing PostgreSQL roles are declared with `pgRole('app_user').existing()` and the equivalent declaration for `analytics_ro`, so Drizzle does not recreate them.
 
 Each tenant table has one permissive FOR ALL policy targeting both roles, with identical USING and WITH CHECK expressions:
 
@@ -79,7 +79,7 @@ Logout/reuse revocation prevent future refreshes; existing access JWTs remain va
 
 `can(ctx, 'resource:action')` requires an explicit database permission and an applicable recognized role scope. There is no implicit permission grant for admins. Admin scope covers one tenant; managers cover employees in their department; reps cover records assigned to their employee; viewer-only users can access aggregates but never individual rows or mutations. Missing scope links and unknown roles fail closed. Multiple roles use the broadest applicable scope. See [api.md](api.md) for initial grants.
 
-Callers must pair permission checks with `scopeFilter` for CRM queries, supplying the resource's assignment column. The filter always includes the authenticated tenant and constrains the responsible employee directly or through a department subquery. Without an assignment column, department/employee scopes return false. Aggregate mode is restricted to aggregate-producing queries; this helper cannot validate arbitrary SQL, and the future analytics guard must enforce that boundary. Current test-only routes demonstrate real deal filtering and reject viewer row access; production CRM/analytics routes remain future work.
+Callers must pair permission checks with `scopeFilter` for CRM queries, supplying the resource's assignment column. The filter always includes the authenticated tenant and constrains the responsible employee directly or through a department subquery. Without an assignment column, department/employee scopes return false. Aggregate mode is restricted to aggregate-producing queries; this helper cannot validate arbitrary SQL, and the future analytics guard must enforce that boundary. Mock deal/task reads enforce assignment scope; manager/rep contact reads require a link to a visible deal. Viewer-only users cannot access any of these row-level methods.
 
 `GET /audit-logs` requires `audit_logs:read` and whole-tenant row scope, keeping it admin-only for the defined roles. It accepts bounded pagination, not a tenant selector. RLS filters the query independently, so a tenant A token cannot retrieve tenant B's events.
 
@@ -91,8 +91,24 @@ The request logger redacts authorization/cookie and password/token fields. Reque
 
 The audit table retains its existing application DML grants. This change does not make audit records tamper-proof against compromised application SQL access; deterministic SQL guards and narrow tool APIs remain required.
 
+## Human-approved task creation
+
+Proposal input contains only an action type and strict task fields. Tenant, requester, approver, role, permissions, and request ID come from server-side context, with database context reloaded at service boundaries. Proposal creation checks `tasks:create` and the assignee's tenant/department/employee scope. Decisions require `approvals:decide` plus requester ownership, same-department manager authority, or tenant admin authority. Listing requires `approvals:read` and the same ownership/department/admin visibility. Other tenants receive 404 for proposal/task lookups. Viewers fail closed even if mistakenly assigned mutation permissions.
+
+Decisions lock the proposal. Approval and execution claiming use guarded Drizzle UPDATEs and commit both transition audits before running the mock. Rejecting cannot race an approval into executing twice. Expired pending/approved proposals transition to expired on an authorized decision attempt and return 410 after commit. No background expiry scheduler is present; pending/approved lists omit elapsed proposals.
+
+The executor and mock share in-process operations, with no extra credentials or transport. `/rest/tasks.task.add` requires an executing/executed proposal identified by `Idempotency-Key`, matching normalized payload, eligible caller, and freshly checked requester permissions. A normal authenticated request cannot create a task while the proposal is still pending or approved. The task UUID equals the proposal UUID. Repeating a completed add returns the matching existing task; changing approved fields or using another tenant's proposal is rejected.
+
+Each execution has at most three total attempts, retrying only typed 5xx/timeout errors with exponential backoff. Task-creation permissions and assignment scope for both requester and approver are checked before claiming and again before every new task insertion. A department manager cannot use a tenant admin's proposal to assign outside the manager's own department. Task creation and its audit event share a transaction; each approval transition and its audit event also share a transaction. Raw unexpected error text is excluded from persisted execution errors and audit metadata.
+
+Task creation and final action completion use separate transactions. A crash or failure to commit the final audit may leave an executing action even if its task exists. UUID uniqueness prevents duplicate task creation, but there is no automatic takeover/recovery of an executing action. Inspect the proposal, task with the same UUID, and audit records before manual recovery. Failed, rejected, and expired actions are terminal; a new independent proposal is required to request the operation again.
+
 ## Verification
 
 The RLS tests were written and run before policies/client implementation; they initially exposed cross-tenant reads and writes. They use a disposable PostgreSQL 18 container and a real app_user password-authenticated pool, not a superuser connection merely pretending to be the application.
 
 Coverage includes unfiltered tenant-A reads, rejected tenant-B inserts, fresh and reused connections without context, composite FK rejection, denied ALTER/DROP, commit and rollback behavior, validated IDs, owner-URL rejection, UPDATE/DELETE isolation, conditional analytics SELECT, and exactly one policy on each tenant table without FORCE. No developer database is reset by these tests.
+
+## Development seed
+
+`npm run db:seed` is an explicit development command using `DATABASE_URL` as `app_user`, with one `withTenant` transaction for each new demo tenant. It neither bypasses RLS nor uses owner credentials. Existing matching tenants are skipped without rewriting records or credentials. The CLI refuses production mode; its known passwords are public development fixtures documented in [seed-scenarios.md](seed-scenarios.md). The tenant-A injection note is stored as CRM activity data and is not executed. Prompt-injection resistance in future agent/SQL tooling still requires separate implementation and evaluation.

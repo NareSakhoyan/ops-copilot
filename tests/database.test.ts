@@ -16,7 +16,7 @@ import { runMigrations, startTestDatabase } from './helpers/database.js';
 
 const expectedTables = [
   'activities', 'audit_logs', 'companies', 'contacts', 'deals', 'departments', 'employees',
-  'leads', 'order_items', 'orders', 'permissions', 'products', 'refresh_tokens',
+  'leads', 'order_items', 'orders', 'pending_actions', 'permissions', 'products', 'refresh_tokens',
   'role_permissions', 'roles', 'tasks', 'tenants', 'user_roles', 'users',
 ].sort();
 
@@ -152,6 +152,10 @@ describe('tenant boundaries', () => {
     { name: 'role/permission', insert: () => db.insert(rolePermissions).values({ tenantId: tenantA.tenantId, roleId: tenantA.roleId, permissionId: tenantB.permissionId }) },
     { name: 'employee/department', insert: () => db.insert(employees).values({ tenantId: tenantA.tenantId, name: 'Invalid', departmentId: tenantB.departmentId }) },
     { name: 'refresh token/user', insert: () => db.insert(refreshTokens).values({ tenantId: tenantA.tenantId, userId: tenantB.userId, tokenHash: 'invalid-token', expiresAt: new Date() }) },
+    { name: 'pending action/requester', insert: () => db.execute(sql`
+      INSERT INTO pending_actions (tenant_id, user_id, payload)
+      VALUES (${tenantA.tenantId}, ${tenantB.userId}, ${JSON.stringify({ title: 'Invalid requester' })}::jsonb)
+    `) },
     { name: 'audit/actor', insert: () => db.insert(auditLogs).values({ tenantId: tenantA.tenantId, actorUserId: tenantB.userId, action: 'read', entityType: 'company' }) },
     { name: 'order item/product', insert: () => db.insert(orderItems).values({ tenantId: tenantA.tenantId, orderId: tenantA.orderId, productId: tenantB.productId, quantity: 1, unitPrice: '100.00', currency: 'USD' }) },
   ];
@@ -170,6 +174,38 @@ describe('tenant boundaries', () => {
       .resolves.toBeDefined();
     await expect(db.execute(sql`INSERT INTO companies (name) VALUES (${'Missing tenant'})`))
       .rejects.toMatchObject({ cause: { code: '23502' } });
+  });
+});
+
+describe('pending actions', () => {
+  it('allows independent identical proposals and defaults to pending with a 24-hour expiry', async () => {
+    const payload = JSON.stringify({ title: 'Follow up', description: 'Call customer', assigneeEmployeeId: tenantA.employeeId, dueAt: '2026-12-01T10:00:00.000Z' });
+    const result = await db.execute(sql`
+      INSERT INTO pending_actions (tenant_id, user_id, payload)
+      VALUES (${tenantA.tenantId}, ${tenantA.userId}, ${payload}::jsonb),
+        (${tenantA.tenantId}, ${tenantA.userId}, ${payload}::jsonb)
+      RETURNING id, type, status, attempts, error, decided_at, executed_at,
+        EXTRACT(EPOCH FROM (expires_at - created_at))::integer AS ttl_seconds
+    `);
+    const records = z.array(z.object({
+      id: z.uuid(), type: z.literal('task.create'), status: z.literal('pending'), attempts: z.literal(0),
+      error: z.null(), decided_at: z.null(), executed_at: z.null(), ttl_seconds: z.literal(86400),
+    })).parse(result.rows);
+    expect(records).toHaveLength(2);
+    expect(records[0]?.id).not.toBe(records[1]?.id);
+  });
+
+  it.each([
+    { name: 'unsupported action', type: 'deal.delete', status: 'pending', attempts: 0, payload: '{}' },
+    { name: 'unknown status', type: 'task.create', status: 'unknown', attempts: 0, payload: '{}' },
+    { name: 'negative attempts', type: 'task.create', status: 'pending', attempts: -1, payload: '{}' },
+    { name: 'more than three attempts', type: 'task.create', status: 'pending', attempts: 4, payload: '{}' },
+    { name: 'non-object payload', type: 'task.create', status: 'pending', attempts: 0, payload: '[]' },
+  ])('rejects $name at the database boundary', async ({ type, status, attempts, payload }) => {
+    await expect(db.execute(sql`
+      INSERT INTO pending_actions (tenant_id, user_id, type, status, attempts, payload)
+      VALUES (${tenantA.tenantId}, ${tenantA.userId}, ${type}, ${status}, ${attempts}, ${payload}::jsonb)
+    `)).rejects.toMatchObject({ cause: { code: '23514' } });
   });
 });
 

@@ -25,7 +25,7 @@ The `users`, `roles`, and `permissions` tables describe application RBAC; they a
 
 ## Schema conventions
 
-All 19 tables have a generated UUID primary key and `created_at`/`updated_at` timestamps with time zones. Drizzle sets `updated_at` on updates; raw SQL must set it explicitly. All tables except `tenants` require `tenant_id` and have a unique `(tenant_id, id)` constraint. References to tenant-scoped rows use explicit composite foreign keys, for example `contacts(tenant_id, company_id)` to `companies(tenant_id, id)`. References to the root tenant use its primary key. Deletion uses PostgreSQL's restrictive default; nothing cascades automatically.
+All 20 tables have a generated UUID primary key and `created_at`/`updated_at` timestamps with time zones. Drizzle sets `updated_at` on updates; raw SQL must set it explicitly. All tables except `tenants` require `tenant_id` and have a unique `(tenant_id, id)` constraint. References to tenant-scoped rows use explicit composite foreign keys, for example `contacts(tenant_id, company_id)` to `companies(tenant_id, id)`. References to the root tenant use its primary key. Deletion uses PostgreSQL's restrictive default; nothing cascades automatically.
 
 Nullable reference columns allow incomplete CRM records. Required references are marked below. UUIDs and timestamps are omitted from the table descriptions because they are common to all records.
 
@@ -44,16 +44,21 @@ Nullable reference columns allow incomplete CRM records. Required references are
 | `leads` | Title, optional company, contact, responsible employee. |
 | `deals` | Title, status, amount/currency, optional lost reason, closed time, company, contact, lead, responsible employee. |
 | `activities` | Type, occurred time, note, required contact, optional deal and employee. |
-| `tasks` | Description, required assignee employee and deadline, status, optional contact and deal. |
+| `tasks` | Title (nullable for legacy records), description, required assignee employee and deadline, status, optional contact and deal. New approved task writes require a title. |
 | `products` | Name, SKU unique within the tenant, price/currency. |
 | `orders` | Amount/currency, optional company, contact, deal. |
 | `order_items` | Required order and product, positive integer quantity, unit price/currency. |
 | `audit_logs` | Action, entity type, optional actor user and entity UUID, request UUID, JSON details containing event metadata; polymorphic entity UUIDs have no foreign key. Legacy/system rows may have no request UUID. |
 | `refresh_tokens` | Required user, SHA-256 token hash unique within the tenant, family UUID, absolute expiration time, optional used/revoked times; raw tokens are not stored. |
+| `pending_actions` | Required requester user, `task.create` type, object JSONB payload, status, attempts (0–3), nullable error/decision/execution timestamps, expiry defaulting to 24 hours after creation. The proposal UUID is its idempotency key. |
 
 Deal statuses are `open`, `won`, `lost`; task statuses are `todo`, `in_progress`, `done`, `cancelled`; activity types are `call`, `email`, `meeting`. SQL CHECK constraints enforce these values. Leads and orders have no workflow status columns. Overdue tasks are derived using `due_at < now()` and `status IN ('todo', 'in_progress')`.
 
 Money uses `numeric(14,2)` and is returned as a string by the driver to preserve decimal precision. SQL checks reject negative amounts, invalid three-uppercase-letter currency formats, and nonpositive quantities. Order totals and cross-record currency conversion are not computed or enforced in this initial schema; writers must supply consistent values. Lost-reason and closed-time fields are available for analytics, without workflow transition enforcement yet.
+
+Approval states are `pending`, `approved`, `executing`, `executed`, `failed`, `rejected`, and `expired`, with `pending` and zero attempts as defaults. CHECK constraints enforce the state/type values, attempt bounds, and object-shaped payload. Proposal UUIDs also become the IDs of tasks created by the executor, providing durable insert uniqueness without an extra key column or table. Independent identical proposals remain allowed. The approval and mock services validate task fields, enforce permissions and transitions, expire stale proposals on decision attempts, and audit state changes in their action transactions; the schema alone does not implement those rules.
+
+The task-title migration preserves existing records with null titles. The approval-permission data migration inserts tenant-local permission definitions and grants them to existing `admin`, `sales_manager`, and `sales_rep` roles. It is idempotent and excludes viewers. Tenants/roles created later must receive their grants during provisioning; migrations do not install an automatic account-seeding mechanism.
 
 ## Query indexes
 
@@ -86,6 +91,7 @@ PostgreSQL creates the following unique B-tree indexes for primary keys and uniq
 - `order_items_pkey` on `(id)` identifies order-item records.
 - `audit_logs_pkey` on `(id)` identifies audit records.
 - `refresh_tokens_pkey` on `(id)` identifies refresh-token records.
+- `pending_actions_pkey` on `(id)` identifies proposals and supplies their unique UUID idempotency keys.
 - `users_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to users.
 - `roles_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to roles.
 - `permissions_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to permissions.
@@ -104,6 +110,7 @@ PostgreSQL creates the following unique B-tree indexes for primary keys and uniq
 - `order_items_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped order-item identity.
 - `audit_logs_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped audit identity.
 - `refresh_tokens_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped token identity.
+- `pending_actions_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped proposal identity for composite references.
 - `users_tenant_email_unique` on `(tenant_id, email)` prevents duplicate account emails within a tenant.
 - `roles_tenant_name_unique` on `(tenant_id, name)` prevents duplicate role names within a tenant.
 - `permissions_tenant_code_unique` on `(tenant_id, code)` prevents duplicate permission codes within a tenant.
@@ -120,4 +127,4 @@ PostgreSQL creates the following unique B-tree indexes for primary keys and uniq
 
 Tests cover empty-database migrations, repeat migration runs, bootstrap roles and DML grants, role switching, cross-tenant foreign-key rejection in CRM and RBAC, mandatory tenant IDs, unique identifiers, status/type/money checks, and the four query indexes.
 
-All 18 tenant-scoped tables enable RLS with one tenant policy each, and authenticated application queries use transaction-local context through `withTenant`. Composite foreign keys additionally prevent cross-tenant references. Authentication uses a separate tenant-only transaction for credential lookup, then sets the verified user ID. JWT authentication, refresh rotation/reuse detection, RBAC, and transactional audit writing are implemented and tested through a real `app_user` connection. There are no AI-related tables; explicit analytics table grants and synthetic data generation remain deferred. See [security.md](security.md) for security boundaries and [api.md](api.md) for authentication contracts.
+All 19 tenant-scoped tables enable RLS with one tenant policy each, and authenticated application queries use transaction-local context through `withTenant`. Composite foreign keys additionally prevent cross-tenant references. Authentication uses a separate tenant-only transaction for credential lookup, then sets the verified user ID. JWT authentication, refresh rotation/reuse detection, RBAC, and transactional audit writing are implemented and tested through a real `app_user` connection. Approval tests cover database constraints, tenant/department authorization, concurrent/conflicting decisions, permission revalidation, three-attempt retry limits, timeout-after-write idempotency, expiry, rejection, and audit rollback. The mock reuses CRM tables inside the existing app. `npm run db:seed` creates deterministic synthetic CRM data through `withTenant` as `app_user`; [seed-scenarios.md](seed-scenarios.md) lists counts, accounts, and verified scenario results. Explicit analytics table grants remain deferred. See [security.md](security.md) for security boundaries and [api.md](api.md) for endpoint contracts.

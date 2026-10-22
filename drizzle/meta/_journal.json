@@ -22,6 +22,27 @@
       "when": 1792691863325,
       "tag": "0002_auth_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792697430641,
+      "tag": "0003_pending_actions",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792699077144,
+      "tag": "0004_task_titles",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792699244727,
+      "tag": "0005_approval_permissions",
+      "breakpoints": true
     }
   ]
 }

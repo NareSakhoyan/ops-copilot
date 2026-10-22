@@ -9,11 +9,16 @@ import type { TenantDatabase } from './db/client.js';
 import { loadAuthConfig } from './auth/config.js';
 import type { AuthConfig } from './auth/config.js';
 import { registerAuth } from './auth/routes.js';
+import { createApprovalsService } from './approvals/service.js';
+import { registerApprovals } from './approvals/routes.js';
+import { createMockBitrix } from './mock-bitrix/service.js';
+import type { MockBitrix } from './mock-bitrix/service.js';
+import { registerMockBitrix } from './mock-bitrix/routes.js';
 
 export function buildApp(
   config: AppConfig,
   logStream?: DestinationStream,
-  options: { authConfig?: AuthConfig; database?: TenantDatabase } = {},
+  options: { authConfig?: AuthConfig; database?: TenantDatabase; mockBitrix?: MockBitrix } = {},
 ) {
   const logger: FastifyBaseLogger = pino({
     level: config.LOG_LEVEL,
@@ -31,7 +36,11 @@ export function buildApp(
   });
 
   app.get('/health', () => ({ status: 'ok' as const }));
-  registerAuth(app, options.database ?? database, options.authConfig ?? loadAuthConfig());
+  const db = options.database ?? database;
+  registerAuth(app, db, options.authConfig ?? loadAuthConfig());
+  const mock = options.mockBitrix ?? createMockBitrix(db);
+  registerMockBitrix(app, mock);
+  registerApprovals(app, createApprovalsService(db, mock));
 
   app.addHook('onClose', closeDatabase);
 

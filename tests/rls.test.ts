@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { closeDatabase, createDbClient, withTenant } from '../src/db/client.js';
 import { companies, deals } from '../src/db/schema/crm.js';
 import { tenants } from '../src/db/schema/tenants.js';
+import { users } from '../src/db/schema/identity.js';
 import { runMigrations, startTestDatabase } from './helpers/database.js';
 
 const contextA = { tenant_id: randomUUID(), user_id: randomUUID() };
@@ -78,6 +79,33 @@ describe('tenant row-level security through a real app_user login', () => {
     expect(dealRows.parse((await appDb.execute(sql`SELECT * FROM deals`)).rows)).toEqual([]);
   });
 
+  it('isolates pending actions with and without tenant context and rejects cross-tenant writes', async () => {
+    await ownerDb.insert(users).values([
+      { id: contextA.user_id, tenantId: contextA.tenant_id, name: 'A', email: 'a@example.invalid', passwordHash: 'fixture-only' },
+      { id: contextB.user_id, tenantId: contextB.tenant_id, name: 'B', email: 'b@example.invalid', passwordHash: 'fixture-only' },
+    ]);
+    await ownerDb.execute(sql`
+      INSERT INTO pending_actions (tenant_id, user_id, payload)
+      VALUES (${contextA.tenant_id}, ${contextA.user_id}, '{}'::jsonb),
+        (${contextB.tenant_id}, ${contextB.user_id}, '{}'::jsonb)
+    `);
+    const result = await appClient.withTenant(contextA, (tx) => tx.execute(sql`SELECT * FROM pending_actions`));
+    expect(z.array(z.object({ tenant_id: z.uuid(), user_id: z.uuid() })).parse(result.rows)).toEqual([contextA]);
+    const ownInsert = await appClient.withTenant(contextA, (tx) => tx.execute(sql`
+      INSERT INTO pending_actions (tenant_id, user_id, payload)
+      VALUES (${contextA.tenant_id}, ${contextA.user_id}, '{}'::jsonb) RETURNING id
+    `));
+    expect(ownInsert.rows).toHaveLength(1);
+    expect((await appDb.execute(sql`SELECT * FROM pending_actions`)).rows).toEqual([]);
+    await expect(appClient.withTenant(contextA, (tx) => tx.execute(sql`
+      INSERT INTO pending_actions (tenant_id, user_id, payload)
+      VALUES (${contextB.tenant_id}, ${contextB.user_id}, '{}'::jsonb)
+    `))).rejects.toMatchObject({ cause: { code: '42501' } });
+    await expect(appClient.withTenant(contextA, (tx) => tx.execute(sql`
+      UPDATE pending_actions SET tenant_id = ${contextB.tenant_id}, user_id = ${contextB.user_id}
+    `))).rejects.toMatchObject({ cause: { code: '42501' } });
+  });
+
   it('filters SELECT * FROM deals without a WHERE clause to tenant A', async () => {
     const result = await appClient.withTenant(contextA, (tx) => tx.execute(sql`SELECT * FROM deals`));
     expect(dealRows.parse(result.rows)).toEqual([{ id: dealA, tenant_id: contextA.tenant_id }]);
@@ -124,7 +152,7 @@ describe('tenant row-level security through a real app_user login', () => {
     const rows = z.array(z.object({ name: z.string(), enabled: z.boolean(), forced: z.boolean(), policies: z.number() })).parse(result.rows);
     expect(rows.find((row) => row.name === 'tenants')).toEqual({ name: 'tenants', enabled: false, forced: false, policies: 0 });
     const tenantTables = rows.filter((row) => row.name !== 'tenants');
-    expect(tenantTables).toHaveLength(18);
+    expect(tenantTables).toHaveLength(19);
     for (const row of tenantTables) {
       expect(row, row.name).toMatchObject({ enabled: true, forced: false, policies: 1 });
     }
@@ -134,7 +162,7 @@ describe('tenant row-level security through a real app_user login', () => {
     const policies = z.array(z.object({
       tablename: z.string(), roles: z.array(z.string()), cmd: z.literal('ALL'), qual: z.string(), with_check: z.string(),
     })).parse(policyResult.rows);
-    expect(policies).toHaveLength(18);
+    expect(policies).toHaveLength(19);
     for (const policy of policies) {
       expect(policy.roles.sort(), policy.tablename).toEqual(['analytics_ro', 'app_user']);
       expect(policy.qual, policy.tablename).toBe(policy.with_check);

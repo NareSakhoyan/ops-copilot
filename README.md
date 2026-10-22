@@ -42,7 +42,25 @@ Generate a migration after changing the Drizzle schema with `npm run db:generate
 
 Implemented endpoints: `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, and permission-gated `GET /audit-logs`. Login returns a 15-minute JWT and a random opaque refresh token. Refresh tokens rotate on each use; reuse revokes the entire family. Families expire seven days after login. Logout revokes the refresh family; access tokens retain their original expiry.
 
-Configure `JWT_SECRET` (at least 32 characters), `JWT_ISSUER` (default `ops-copilot`), and `JWT_AUDIENCE` (default `ops-copilot-api`). The local `.env` contains a signing secret; the example deliberately leaves it blank. There are no default CRM accounts or automatic RBAC seeds. Provision tenant users with Argon2 password hashes and tenant-local role/permission memberships before logging in. [docs/api.md](docs/api.md) contains request examples, the permission matrix, and a minimal local account-provisioning example. [docs/security.md](docs/security.md) explains request context, scoping, rate limiting, and token lifecycle limitations.
+Configure `JWT_SECRET` (at least 32 characters), `JWT_ISSUER` (default `ops-copilot`), and `JWT_AUDIENCE` (default `ops-copilot-api`). The local `.env` contains a signing secret; the example deliberately leaves it blank. Accounts are not created on startup. Use the development seed below or provision tenant users with Argon2 password hashes and tenant-local role/permission memberships before logging in. The approval migration grants the new workflow/read permissions to existing admin/manager/rep roles; roles created later need their grants provisioned explicitly. [docs/api.md](docs/api.md) contains request examples, the permission matrix, and a minimal local account-provisioning example. [docs/security.md](docs/security.md) explains request context, scoping, rate limiting, and token lifecycle limitations.
+
+## Development data
+
+After migrations and `app_user` password setup, run:
+
+```sh
+npm run db:seed
+```
+
+This creates **9,336 rows** across Ararat Trade and Sevan Logistics, using fixed-seed Armenian/English Faker data. It runs as `app_user` through one tenant transaction each and skips existing demo tenants without changing them. Dates are relative to the initial seed run. The CLI refuses production mode. [docs/seed-scenarios.md](docs/seed-scenarios.md) lists tenant UUIDs, development passwords, exact counts, and planted analytics/security scenarios.
+
+## Task approvals and mock Bitrix
+
+The approval service creates validated `task.create` proposals without creating tasks. Eligible requesters, department managers, or tenant admins can list, approve, or reject them through `/approvals`. Approval claims execution atomically; repeated/concurrent approvals cannot insert duplicate tasks. The executor revalidates permissions and allows three total attempts for typed 5xx/timeout errors, with 250/500 ms backoff. Every state transition and task creation is audited transactionally.
+
+The four authenticated `/rest/` mock Bitrix methods run in this app and reuse CRM tables. Task-add requires the approved proposal UUID as `Idempotency-Key`; independent identical proposals have different UUIDs. See [docs/api.md](docs/api.md) for service/route examples and [docs/security.md](docs/security.md) for crash-recovery limitations. The future agent endpoint will call proposal creation; no additional proposal-creation HTTP route is exposed.
+
+Run `npx vitest run tests/approvals.test.ts` for the complete proposal → approval → task → audit integration scenarios. Tests use disposable PostgreSQL and do not alter the development database.
 
 ## Verification and production build
 
@@ -83,4 +101,4 @@ tests/
 docs/
 ```
 
-The database module contains the Drizzle schema, tenant client, and migration tooling. `auth/` contains authentication and RBAC; `observability/audit.ts` writes transactional audit events. Other module directories remain placeholders for future features. See [AGENTS.md](AGENTS.md) for development rules and [docs/decisions.md](docs/decisions.md) for recorded decisions.
+The database module contains the Drizzle schema, tenant client, and migration tooling. `auth/` contains authentication and RBAC; `approvals/` validates and executes approved proposals; `mock-bitrix/` provides CRM-backed mock operations; `observability/audit.ts` writes transactional audit events. Agent/RAG/SQL-guard modules remain placeholders for future features. See [AGENTS.md](AGENTS.md) for development rules and [docs/decisions.md](docs/decisions.md) for recorded decisions.
