@@ -51,7 +51,7 @@ Each record contains `id`, `tenantId`, `actorUserId`, `action`, `entityType`, `e
 
 ## Task proposal service
 
-The future agent/tool calls `createApprovalsService(database, mock).createProposal(request.context, input)` from authenticated server code. There is no separate proposal-creation HTTP endpoint. The strict input is:
+The agent/tool calls `createApprovalsService(database, mock).createProposal(request.context, input)` from authenticated server code. There is no separate proposal-creation HTTP endpoint. The strict input is:
 
 ```json
 {
@@ -135,7 +135,7 @@ A process crash or final audit failure can leave an action executing; there is n
 
 ## Initial permissions and scopes
 
-Provision permissions in each tenant's `permissions`, `roles`, `role_permissions`, and `user_roles` tables. There is no implicit admin permission bypass. The approval data migration augments existing admin/manager/rep roles with the five new workflow/read codes. Tenants/roles created afterward need explicit provisioning. The matrix is:
+Provision permissions in each tenant's `permissions`, `roles`, `role_permissions`, and `user_roles` tables. There is no implicit admin permission bypass. The approval data migration augments existing admin/manager/rep roles with the five new workflow/read codes. Migration 0008 separately adds `companies:read` to existing admin/manager/rep roles. Tenants/roles created afterward need explicit provisioning. The matrix is:
 
 | Permission | admin | sales_manager | sales_rep | viewer |
 | --- | --- | --- | --- | --- |
@@ -146,6 +146,7 @@ Provision permissions in each tenant's `permissions`, `roles`, `role_permissions
 | `tasks:create` | Tenant assignees | Department assignees | Self | Denied |
 | `tasks:read` | Tenant | Department | Assigned tasks | Denied |
 | `contacts:read` | Tenant | Contacts of visible deals | Contacts of visible deals | Denied |
+| `companies:read` | Tenant | Companies of visible deals | Companies of visible deals | Denied |
 | `approvals:read` | Tenant | Own/department requesters | Own | Denied |
 | `approvals:decide` | Tenant | Own/department requesters | Own | Denied |
 
@@ -155,7 +156,7 @@ The mock routes demonstrate scoped CRM reads. Future routes/tools must call `can
 
 ## Internal SQL analytics API
 
-The future SQL Analytics Tool calls `runAnalyticsQuery(request.context, sql, question?)` from `src/sql-guard/execute.ts`. This change adds no HTTP SQL endpoint. The optional question is stored in `sql_execution_log`, or NULL when omitted. Results are arrays of at most 200 row objects; PostgreSQL money/numeric/bigint values may be strings.
+The SQL Analytics Tool calls `runAnalyticsQuery(request.context, sql, question?)` from `src/sql-guard/execute.ts`. This change adds no HTTP SQL endpoint. The optional question is stored in `sql_execution_log`, or NULL when omitted. Results are arrays of at most 200 row objects; PostgreSQL money/numeric/bigint values may be strings.
 
 ```ts
 const rows = await runAnalyticsQuery(ctx,
@@ -221,7 +222,7 @@ RETURNING id AS role_id
 INSERT INTO permissions (tenant_id, code, description)
 SELECT :'tenant_id'::uuid, code, code FROM unnest(ARRAY[
   'deals:read', 'deals:aggregate', 'departments:read', 'audit_logs:read',
-  'contacts:read', 'tasks:read', 'tasks:create', 'approvals:read', 'approvals:decide'
+  'contacts:read', 'companies:read', 'tasks:read', 'tasks:create', 'approvals:read', 'approvals:decide'
 ]) AS codes(code);
 INSERT INTO role_permissions (tenant_id, role_id, permission_id)
 SELECT tenant_id, :'role_id'::uuid, id FROM permissions WHERE tenant_id = :'tenant_id';
@@ -239,3 +240,58 @@ Run the final command separately to print your tenant ID:
 ```
 
 Start `npm run dev`, then log in with the printed tenant UUID, `admin@example.invalid`, and the original password. Save the returned employee UUID for task-proposal input. The PostgreSQL account password and this CRM user's password are separate credentials.
+
+## Chat
+
+`POST /chat` requires Bearer authentication. The strict request body is:
+
+```json
+{ "message": "Show lost deals from the last 30 days", "allowTaskDraft": false }
+```
+
+`message` is nonempty text up to 8,000 characters; `allowTaskDraft` defaults to false. Tenant/user/role/context fields and arbitrary message histories are rejected. The server reloads identity, permissions, and scope from the authenticated request. Clients cannot provide system prompts or tool results.
+
+```json
+{
+  "answer": "There are 600 deals.",
+  "toolCalls": [{
+    "toolCallId": "<model-call-id>",
+    "name": "sql_analytics",
+    "status": "succeeded",
+    "sql": "SELECT count(*) AS total FROM v_deals",
+    "rowCount": 1
+  }],
+  "pendingActionIds": []
+}
+```
+
+This response is illustrative; live wording and SQL depend on the model. Tool summaries report succeeded/failed without raw arguments, database diagnostics, or SDK errors. SQL summaries include the accepted SQL and row count. No model-generated ID is reported as an actual pending action: IDs come from successful proposal inserts.
+
+| Tool | Behavior |
+| --- | --- |
+| `crm_search` | Contacts/companies/deals using strict filters and fresh RBAC. Common filters: `id`, `query` (literal name/title substring), `createdAfter`, `limit` (1–50). Contacts/deals additionally accept `companyId`; deals also accept `contactId`, `status`, `closedAfter`. Dates are timezone-qualified ISO timestamps. Contacts include up to three scoped recent activity notes from a bounded activity read. No email/phone fields are sent to the model. |
+| `sql_analytics` | Accepts `question`, generates SQL from only the allowed view columns, and runs the existing guarded runner. A 400/403 rejection receives one safe correction; a second rejection disables SQL attempts for that request. Execution errors/timeouts refuse immediately. Failed SQL results cannot be rewritten into an apparent successful answer by the outer agent. |
+| `task_draft` | Available only with explicit `allowTaskDraft:true`. Validates the existing title/description/assigneeEmployeeId/dueAt payload and creates a pending proposal plus audit. It has no approval/execution method. |
+| `kb_search` | Accepts `question`, calls `answerFromKb` with the application database, and returns a cited answer or refusal using the configured embedding model/threshold. If the outer response drops or invents citations, chat returns the validated KB answer instead. |
+| `audit_activity` | Accepts `limit` (1–30) and reads recent tenant audit entries with `audit_logs:read` and whole-tenant scope. |
+
+For drafting:
+
+```json
+{
+  "message": "Draft a task for me: call the customer, confirm order details, deadline 2027-01-10T10:00:00Z.",
+  "allowTaskDraft": true
+}
+```
+
+If an employee ID or required detail cannot be resolved, the agent should ask rather than invent it. The authenticated employee ID is supplied by server context for self-assignment. A successful draft stops the loop and returns a deterministic preview containing pending action ID, title, description, assignee name/ID, and normalized UTC deadline. The answer states that approval is required. Read it, then call the existing approve/reject endpoints. `allowTaskDraft:true` never grants execution permission or counts as approval. Repeated independent chat requests may create independent proposals, consistent with proposal-UUID idempotency.
+
+Model creation is lazy; missing provider credentials do not break health/auth startup. Invalid bodies return 400, unauthenticated requests 401, provider/configuration failures 503 with a safe message, and tool-level denials are reported in the chat result. If the outer model loop reaches its 300-second (five-minute) deadline, `/chat` returns HTTP 504 with `{"error":"AI request timed out after 300 seconds. Try a simpler request."}`. A provider `TimeoutError` before that deadline returns HTTP 504 with `{"error":"AI provider timed out. Try again or simplify your request."}`. Neither response exposes provider diagnostics. If a proposal was already saved, its pending-approval preview and IDs still take precedence over a model failure; the action is never executed automatically. Model requests receive two SDK retries with exponential backoff for retryable errors including 429; the entire workflow is never retried. The outer loop uses AI SDK 7 `isStepCount(6)` and stops early on task drafts. Inner SQL/KB calls are separate from this step count. Each model-visible tool result is bounded to 8,000 UTF-8 bytes and marked untrusted/truncated where necessary. This is an approximate token cap; Armenian token density differs.
+
+Test coverage uses mocked language models with real disposable PostgreSQL. Live model tool selection, Armenian wording, and prompt-injection robustness still require evaluation; no live-model accuracy claim follows from mocked tests.
+
+The 300-second agent deadline starts after authentication, before the agent refreshes context, and covers model calls and tool waits. The handler races the workflow against expiry in addition to signalling cancellation, so an uncooperative provider or tool cannot keep it awaiting that promise indefinitely. Nested SQL generation and KB answer generation inherit the same deadline rather than starting another five-minute window. Cancellation checks prevent new tools, late SQL results, and task proposals from starting work after expiry. Cancellation does not forcibly undo an already-running database transaction: an in-flight proposal can still finish as pending and is discoverable through `GET /approvals`. The agent never approves or executes it. Authentication and infrastructure delays before the agent handler are outside this deadline.
+
+## Local model configuration
+
+Chat, SQL generation, and KB answer generation default to `LLM_PROVIDER=ollama`, `LLM_MODEL=gemma4:26b`, and `OLLAMA_BASE_URL=http://127.0.0.1:11434/v1`. Ollama must be running with the model installed (`ollama pull gemma4:26b` on a fresh machine). The shared factory uses the Vercel AI SDK OpenAI-compatible adapter and local `/v1/chat/completions`, including tool calls, without a cloud API key. The HTTP `/chat` request/response contract and authorization checks are unchanged. Google and Gateway remain explicit env-selectable options. Google embedding calls are configured separately and are still required for KB ingestion/search.

@@ -13,7 +13,9 @@ EMBED_DIM=1536
 EMBED_RPM=your-project-limit
 EMBED_RPD=your-project-limit
 EMBED_TPM=your-project-limit
-LLM_MODEL=gemini-3.8-flash
+LLM_PROVIDER=ollama
+LLM_MODEL=gemma4:26b
+OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
 KB_REFUSAL_THRESHOLD=your-evaluated-number
 ```
 
@@ -25,7 +27,7 @@ npm run embed:check
 
 This makes live Google calls: five passage/query pairs per language, ten Armenian sentences and ten English. Passages use `RETRIEVAL_DOCUMENT`; queries use `RETRIEVAL_QUERY`. It prints returned dimension, every related/unrelated cosine score, and count/min/max/mean for each group/language. Confirm Armenian related scores clearly beat unrelated scores. Choose `KB_REFUSAL_THRESHOLD` using these results and representative actual KB questions; this diagnostic does not select it or guarantee answer quality.
 
-The exact options are `providerOptions: { google: { taskType, outputDimensionality: EMBED_DIM } }`; see the [Google provider documentation](https://ai-sdk.dev/providers/ai-sdk-providers/google). Vectors are validated and normalized. The selected chat model ID is `gemini-3.8-flash`.
+The exact options are `providerOptions: { google: { taskType, outputDimensionality: EMBED_DIM } }`; see the [Google provider documentation](https://ai-sdk.dev/providers/ai-sdk-providers/google). Vectors are validated and normalized. The chat model is local Ollama `gemma4:26b` through the shared model factory; embedding calls remain Google calls. Ollama needs no cloud key for answer generation. Switching only the chat model does not require re-embedding or changing the vector dimension.
 
 ## Migrate and ingest
 
@@ -59,7 +61,7 @@ Empty/unknown roles, malformed YAML, extra metadata keys, and titles containing 
 
 ## Search and answer
 
-These are internal tool functions, not HTTP endpoints:
+These functions are called by the chat agent (`POST /chat`); there is no standalone KB HTTP endpoint:
 
 ```ts
 import { answerFromKb } from './src/rag/answer.js';

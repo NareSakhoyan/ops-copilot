@@ -19,7 +19,6 @@ export function parseEmbeddingConfig(input: unknown): EmbeddingConfig {
 }
 export function parseAnswerConfig(input: unknown) {
   return z.object({
-    LLM_MODEL: z.string().trim().min(1).default('gemini-3.8-flash'),
     KB_REFUSAL_THRESHOLD: z.preprocess((value) => value === '' ? undefined : value, z.coerce.number().min(-1).max(1)),
   }).parse(input);
 }

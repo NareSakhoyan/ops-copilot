@@ -48,8 +48,8 @@ afterAll(async () => {
 describe('development seed', () => {
   it.each(demoTenants)('seeds all requested counts through app_user RLS for $name', async (tenant) => {
     const expected = {
-      departments: 2, employees: 12, users: 12, roles: 4, permissions: 9,
-      user_roles: 12, role_permissions: 25, companies: 150, contacts: 400,
+      departments: 2, employees: 12, users: 12, roles: 4, permissions: 10,
+      user_roles: 12, role_permissions: 28, companies: 150, contacts: 400,
       leads: 500, deals: 600, activities: 1500, tasks: 500, products: 40,
       orders: 300, order_items: 600, audit_logs: 1, pending_actions: 0, refresh_tokens: 0, sql_execution_log: 0, documents: 0, chunks: 0,
     };
@@ -136,6 +136,7 @@ describe('development seed', () => {
         expect(can(ctx, 'audit_logs:read')).toBe(role === 'admin');
         expect(can(ctx, 'departments:read')).toBe(role === 'admin' || role === 'sales_manager');
         expect(can(ctx, 'deals:read')).toBe(role !== 'viewer');
+        expect(can(ctx, 'companies:read')).toBe(role !== 'viewer');
       });
     }
   });

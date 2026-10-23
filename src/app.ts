@@ -14,11 +14,14 @@ import { registerApprovals } from './approvals/routes.js';
 import { createMockBitrix } from './mock-bitrix/service.js';
 import type { MockBitrix } from './mock-bitrix/service.js';
 import { registerMockBitrix } from './mock-bitrix/routes.js';
+import type { LanguageModel } from 'ai';
+import { createAgentService } from './agent/service.js';
+import { registerChat } from './agent/routes.js';
 
 export function buildApp(
   config: AppConfig,
   logStream?: DestinationStream,
-  options: { authConfig?: AuthConfig; database?: TenantDatabase; mockBitrix?: MockBitrix } = {},
+  options: { authConfig?: AuthConfig; database?: TenantDatabase; mockBitrix?: MockBitrix; agentModel?: () => LanguageModel } = {},
 ) {
   const logger: FastifyBaseLogger = pino({
     level: config.LOG_LEVEL,
@@ -40,7 +43,9 @@ export function buildApp(
   registerAuth(app, db, options.authConfig ?? loadAuthConfig());
   const mock = options.mockBitrix ?? createMockBitrix(db);
   registerMockBitrix(app, mock);
-  registerApprovals(app, createApprovalsService(db, mock));
+  const proposals = createApprovalsService(db, mock);
+  registerApprovals(app, proposals);
+  registerChat(app, createAgentService({ database: db, proposals, ...(options.agentModel ? { model: options.agentModel } : {}) }));
 
   app.addHook('onClose', closeDatabase);
 

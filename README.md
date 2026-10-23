@@ -52,19 +52,19 @@ After migrations and `app_user` password setup, run:
 npm run db:seed
 ```
 
-This creates **9,336 rows** across Ararat Trade and Sevan Logistics, using fixed-seed Armenian/English Faker data. It runs as `app_user` through one tenant transaction each and skips existing demo tenants without changing them. Dates are relative to the initial seed run. The CLI refuses production mode. [docs/seed-scenarios.md](docs/seed-scenarios.md) lists tenant UUIDs, development passwords, exact counts, and planted analytics/security scenarios.
+This creates **9,344 rows** across Ararat Trade and Sevan Logistics, using fixed-seed Armenian/English Faker data. It runs as `app_user` through one tenant transaction each and skips existing demo tenants without changing them. Dates are relative to the initial seed run. The CLI refuses production mode. [docs/seed-scenarios.md](docs/seed-scenarios.md) lists tenant UUIDs, development passwords, exact counts, and planted analytics/security scenarios.
 
 ## Task approvals and mock Bitrix
 
 The approval service creates validated `task.create` proposals without creating tasks. Eligible requesters, department managers, or tenant admins can list, approve, or reject them through `/approvals`. Approval claims execution atomically; repeated/concurrent approvals cannot insert duplicate tasks. The executor revalidates permissions and allows three total attempts for typed 5xx/timeout errors, with 250/500 ms backoff. Every state transition and task creation is audited transactionally.
 
-The four authenticated `/rest/` mock Bitrix methods run in this app and reuse CRM tables. Task-add requires the approved proposal UUID as `Idempotency-Key`; independent identical proposals have different UUIDs. See [docs/api.md](docs/api.md) for service/route examples and [docs/security.md](docs/security.md) for crash-recovery limitations. The future agent endpoint will call proposal creation; no additional proposal-creation HTTP route is exposed.
+The four authenticated `/rest/` mock Bitrix methods run in this app and reuse CRM tables. Task-add requires the approved proposal UUID as `Idempotency-Key`; independent identical proposals have different UUIDs. See [docs/api.md](docs/api.md) for service/route examples and [docs/security.md](docs/security.md) for crash-recovery limitations. The chat agent calls proposal creation when drafting is explicitly enabled; no additional proposal-creation HTTP route is exposed.
 
 Run `npx vitest run tests/approvals.test.ts` for the complete proposal → approval → task → audit integration scenarios. Tests use disposable PostgreSQL and do not alter the development database.
 
 ## Knowledge base
 
-Ten synthetic Armenian/English documents are provided in `kb/`, including one manager/admin-only policy. Configure the Google key and explicit project embedding quotas in `.env`, run `npm run embed:check`, and choose `KB_REFUSAL_THRESHOLD` before answering. Then ingest with `npm run kb:ingest -- ./kb --tenant-id <uuid> --user-id <admin-uuid>`. Ingestion reuses unchanged vectors; retrieval applies tenant/current-role ACLs in SQL; answers include citations or refuse insufficient evidence without a chat call. See [docs/knowledge-base.md](docs/knowledge-base.md) for setup and verification. No KB HTTP endpoint is exposed yet.
+Ten synthetic Armenian/English documents are provided in `kb/`, including one manager/admin-only policy. Configure the Google key and explicit project embedding quotas in `.env`, run `npm run embed:check`, and choose `KB_REFUSAL_THRESHOLD` before answering. Then ingest with `npm run kb:ingest -- ./kb --tenant-id <uuid> --user-id <admin-uuid>`. Ingestion reuses unchanged vectors; retrieval applies tenant/current-role ACLs in SQL; answers include citations or refuse insufficient evidence without a chat call. See [docs/knowledge-base.md](docs/knowledge-base.md) for setup and verification. Knowledge answers are available through the chat agent; there is no standalone KB HTTP endpoint.
 
 The live calibration run on 2026-10-23 returned **1536 dimensions**. Each language used five related query/passage pairs and twenty unrelated comparisons:
 
@@ -91,6 +91,61 @@ npm run kb:ingest -- ./kb \
 ```
 
 Repeat the ingestion command without changing the documents; expect `documents: 10, skipped: 10, embedded: 0`.
+
+## Chat agent
+
+`POST /chat` uses a single Vercel AI SDK agent with five scoped tools: CRM search, SQL analytics, task drafting, knowledge search, and audit reading. It replies in Armenian or English and stops after at most six outer model steps. SQL generation/correction and KB answering may make additional bounded model calls. Tool data is untrusted and capped to 8,000 UTF-8 bytes per model-visible result (roughly 2,000 English tokens).
+
+Default chat configuration uses **local Ollama with `gemma4:26b`** through the Vercel AI SDK's OpenAI-compatible adapter:
+
+```dotenv
+LLM_PROVIDER=ollama
+LLM_MODEL=gemma4:26b
+OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
+```
+
+On a fresh machine, install [Ollama](https://ollama.com), start its local service with a larger context window than Ollama's CPU default (see below), and download the model:
+
+```sh
+OLLAMA_CONTEXT_LENGTH=6144 ollama serve &
+ollama pull gemma4:26b
+ollama list
+npm run dev
+```
+
+The model is already installed on the current development machine. No API key is needed for local chat. Agent planning, SQL generation, and KB answer generation all use the shared Ollama model factory. The agent deadline is 300 seconds (five minutes), covering context refresh, generation, and tool waits after authentication. SQL/KB generation shares the agent's remaining time. The handler returns a timeout even if a provider/tool ignores cancellation; it does not wait indefinitely for that call to settle. The existing six-step limit, result caps, tenant/RBAC checks, and approval boundaries still apply. Local generation speed depends on the machine and model warm-up.
+
+**`OLLAMA_CONTEXT_LENGTH` must be raised above Ollama's CPU-inferred default (4096) for this model.** With the default, the agent's system prompt, five tool schemas, and a tool result together frequently exceed the window; `--context-shift` then silently evicts earlier context (sometimes the user's own question), and the model responds with a generic, ungrounded reply instead of using the tool's data. `OLLAMA_CONTEXT_LENGTH=6144` (set on `ollama serve`, not in this project's `.env`) was confirmed sufficient for the `sql_analytics`/`crm_search` flows without pushing the full three-call pipeline (tool selection, SQL generation, final answer) past the 300-second deadline on CPU-only hardware; raise it further only if grounding failures persist, and watch for the deadline trade-off if you do.
+
+**KB embeddings still use Google** (`EMBED_MODEL`, Google key, and embedding quotas), so KB ingestion/search are not fully offline. Existing embeddings and the refusal threshold do not change when switching only the chat model.
+
+Optional cloud configurations remain available: `LLM_PROVIDER=google` with a Google `LLM_MODEL` and `GOOGLE_GENERATIVE_AI_API_KEY`, `LLM_PROVIDER=gateway` with `AI_GATEWAY_API_KEY` and `LLM_MODEL=provider/model`, or `LLM_PROVIDER=vertex` with `GOOGLE_VERTEX_PROJECT` and `GOOGLE_VERTEX_LOCATION`. A bare gateway model receives a `google/` prefix. See [Ollama's compatibility API](https://docs.ollama.com/api/openai-compatibility) and the [AI SDK compatible-provider documentation](https://ai-sdk.dev/providers/openai-compatible-providers).
+
+### Vertex AI (hosted, faster than local CPU inference)
+
+```dotenv
+LLM_PROVIDER=vertex
+LLM_MODEL=gemini-3-flash-preview
+GOOGLE_VERTEX_PROJECT=<your-gcp-project-id>
+GOOGLE_VERTEX_LOCATION=global
+```
+
+Vertex AI takes **no API key** in this app's `.env`. Authentication uses Google's Application Default Credentials (ADC): an attached service account when the app runs on GCP infrastructure (Cloud Run, GCE, GKE), or a service account key file referenced by a real `GOOGLE_APPLICATION_CREDENTIALS` process environment variable (set at the OS/shell/deploy level, never committed to this repo) when running elsewhere. The GCP project's own service account needs the Vertex AI User role (`roles/aiplatform.user`) at minimum. Switching to Vertex only changes the chat model; KB embeddings keep using the separately configured Google AI Studio key.
+
+The exact model ID and location available depend on your project's Vertex AI Model Garden access, which can take a few minutes to propagate on a brand-new project; `global` avoided a regional 404 in testing. If `LLM_MODEL` 404s with "Publisher model ... not found or your project does not have access to it", check the Model Garden console for that project rather than assuming the model name is wrong.
+
+After logging in, use the returned access token:
+
+```sh
+curl -X POST http://127.0.0.1:3000/chat \
+  -H 'Authorization: Bearer <accessToken>' \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Որքա՞ն է գործարքների ընդհանուր քանակը։"}'
+```
+
+The response contains `answer`, `toolCalls`, and `pendingActionIds`. SQL summaries include the accepted SQL and returned row count. Apply `npm run db:migrate` to grant the new `companies:read` permission to existing admin/manager/rep roles. New seeds include it; viewers cannot read company rows.
+
+Chat is read-only by default. A task proposal requires `allowTaskDraft: true`, an explicit drafting request, and sufficient task details. Only a pending action is inserted, with a deterministic preview indicating approval is required; the agent cannot approve or execute it. Approve or reject the returned UUID through the existing `/approvals/:id/approve` or `/reject` routes. Tool-step limits and 429 retries never approve a proposal. See [docs/api.md](docs/api.md#chat) for payloads and safety boundaries.
 
 ## Verification and production build
 
@@ -131,4 +186,4 @@ tests/
 docs/
 ```
 
-The database module contains the Drizzle schema, tenant client, and migration tooling. `auth/` contains authentication and RBAC; `approvals/` validates and executes approved proposals; `mock-bitrix/` provides CRM-backed mock operations; `observability/audit.ts` writes transactional audit events. The SQL guard validates and runs scoped analytics; `rag/` provides KB ingestion, retrieval, and cited answers. The agent module remains a placeholder. See [AGENTS.md](AGENTS.md) for development rules and [docs/decisions.md](docs/decisions.md) for recorded decisions.
+The database module contains the Drizzle schema, tenant client, and migration tooling. `auth/` contains authentication and RBAC; `approvals/` validates and executes approved proposals; `mock-bitrix/` provides CRM-backed mock operations; `observability/audit.ts` writes transactional audit events. The SQL guard validates and runs scoped analytics; `rag/` provides KB ingestion, retrieval, and cited answers. The single agent exposes these services through authenticated `POST /chat`. See [AGENTS.md](AGENTS.md) for development rules and [docs/decisions.md](docs/decisions.md) for recorded decisions.

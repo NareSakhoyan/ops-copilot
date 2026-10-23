@@ -1,9 +1,10 @@
 import { pino } from 'pino';
-import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  // Catch environment-dependent schema initialization in the normal startup error path.
+  const { buildApp } = await import('./app.js');
   const app = buildApp(config);
 
   try {

@@ -26,8 +26,8 @@ The `seed.completed` audit record stores `details.referenceDate` and `details.fa
 | --- | ---: | ---: |
 | Departments | 2 | 4 |
 | Employees / users | 12 each | 24 each |
-| Roles / permissions | 4 / 9 | 8 / 18 |
-| User-role / role-permission memberships | 12 / 25 | 24 / 50 |
+| Roles / permissions | 4 / 10 | 8 / 20 |
+| User-role / role-permission memberships | 12 / 28 | 24 / 56 |
 | Companies | 150 | 300 |
 | Contacts | 400 | 800 |
 | Leads | 500 | 1,000 |
@@ -38,7 +38,7 @@ The `seed.completed` audit record stores `details.referenceDate` and `details.fa
 | Orders / order items | 300 / 600 | 600 / 1,200 |
 | Seed audit records | 1 | 2 |
 
-Including the two tenant rows, a fresh run creates **9,336 rows**. Refresh tokens and pending actions start empty. Orders have two items each, amounts equal their line totals, and money uses AMD consistently. Related contacts, companies, leads, deals, employees, orders, and order items all belong to their own tenant.
+Including the two tenant rows, a fresh run creates **9,344 rows**. Refresh tokens and pending actions start empty. Orders have two items each, amounts equal their line totals, and money uses AMD consistently. Related contacts, companies, leads, deals, employees, orders, and order items all belong to their own tenant.
 
 ## Development logins
 
@@ -59,7 +59,7 @@ curl -X POST http://127.0.0.1:3000/auth/login \
 
 Each user has exactly one role and an employee link. There are five managers, five reps, one admin, and one viewer per tenant. Non-admin employees alternate between `Վաճառք Ա / Sales A` and `Վաճառք Բ / Sales B`; the admin has no department restriction.
 
-Permissions follow the [API permission matrix](api.md#initial-permissions-and-scopes). Seeded codes are `deals:read`, `deals:aggregate`, `departments:read`, `audit_logs:read`, `tasks:create`, `tasks:read`, `contacts:read`, `approvals:read`, and `approvals:decide`. Admins have all nine; managers have all except audit reading; reps additionally lack department reading; viewers have only `deals:aggregate`. All grants are tenant-local.
+Permissions follow the [API permission matrix](api.md#initial-permissions-and-scopes). Seeded codes are `deals:read`, `deals:aggregate`, `departments:read`, `audit_logs:read`, `tasks:create`, `tasks:read`, `contacts:read`, `companies:read`, `approvals:read`, and `approvals:decide`. Admins have all ten; managers have all except audit reading; reps additionally lack department reading; viewers have only `deals:aggregate`. All grants are tenant-local. Migration 0008 adds `companies:read` to existing tenant admin/manager/rep roles; existing demo tenants still remain unchanged by seed reruns.
 
 ## Planted scenarios
 

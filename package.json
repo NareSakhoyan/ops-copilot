@@ -27,6 +27,8 @@
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.104",
+    "@ai-sdk/google-vertex": "^5.0.121",
+    "@ai-sdk/openai-compatible": "^3.0.77",
     "@fastify/rate-limit": "^11.2.1",
     "ai": "^7.0.150",
     "argon2": "^0.45.1",

@@ -12,9 +12,9 @@ export const devPasswords = {
 
 type Role = keyof typeof devPasswords;
 const roleGrants: Record<Role, readonly string[]> = {
-  admin: ['deals:read', 'deals:aggregate', 'departments:read', 'audit_logs:read', 'tasks:create', 'tasks:read', 'contacts:read', 'approvals:read', 'approvals:decide'],
-  sales_manager: ['deals:read', 'deals:aggregate', 'departments:read', 'tasks:create', 'tasks:read', 'contacts:read', 'approvals:read', 'approvals:decide'],
-  sales_rep: ['deals:read', 'deals:aggregate', 'tasks:create', 'tasks:read', 'contacts:read', 'approvals:read', 'approvals:decide'],
+  admin: ['deals:read', 'deals:aggregate', 'departments:read', 'audit_logs:read', 'tasks:create', 'tasks:read', 'contacts:read', 'companies:read', 'approvals:read', 'approvals:decide'],
+  sales_manager: ['deals:read', 'deals:aggregate', 'departments:read', 'tasks:create', 'tasks:read', 'contacts:read', 'companies:read', 'approvals:read', 'approvals:decide'],
+  sales_rep: ['deals:read', 'deals:aggregate', 'tasks:create', 'tasks:read', 'contacts:read', 'companies:read', 'approvals:read', 'approvals:decide'],
   viewer: ['deals:aggregate'],
 };
 
