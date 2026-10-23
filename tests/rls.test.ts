@@ -152,7 +152,7 @@ describe('tenant row-level security through a real app_user login', () => {
     const rows = z.array(z.object({ name: z.string(), enabled: z.boolean(), forced: z.boolean(), policies: z.number() })).parse(result.rows);
     expect(rows.find((row) => row.name === 'tenants')).toEqual({ name: 'tenants', enabled: false, forced: false, policies: 0 });
     const tenantTables = rows.filter((row) => row.name !== 'tenants');
-    expect(tenantTables).toHaveLength(20);
+    expect(tenantTables).toHaveLength(22);
     for (const row of tenantTables) {
       expect(row, row.name).toMatchObject({ enabled: true, forced: false, policies: 1 });
     }
@@ -162,7 +162,7 @@ describe('tenant row-level security through a real app_user login', () => {
     const policies = z.array(z.object({
       tablename: z.string(), roles: z.array(z.string()), cmd: z.literal('ALL'), qual: z.string(), with_check: z.string(),
     })).parse(policyResult.rows);
-    expect(policies).toHaveLength(20);
+    expect(policies).toHaveLength(22);
     for (const policy of policies) {
       expect(policy.roles.sort(), policy.tablename).toEqual(['analytics_ro', 'app_user']);
       expect(policy.qual, policy.tablename).toBe(policy.with_check);

@@ -18,13 +18,17 @@
     "prepare": "husky",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
-    "db:seed": "tsx src/db/seed/run.ts"
+    "db:seed": "tsx src/db/seed/run.ts",
+    "embed:check": "tsx scripts/embed-check.ts",
+    "kb:ingest": "tsx src/rag/ingest.ts"
   },
   "lint-staged": {
     "*.{ts,js}": "eslint --fix"
   },
   "dependencies": {
+    "@ai-sdk/google": "^4.0.104",
     "@fastify/rate-limit": "^11.2.1",
+    "ai": "^7.0.150",
     "argon2": "^0.45.1",
     "drizzle-orm": "^0.45.4",
     "fastify": "^5.12.7",
@@ -32,6 +36,7 @@
     "pg": "^8.23.1",
     "pgsql-ast-parser": "^12.0.2",
     "pino": "^10.4.0",
+    "yaml": "^2.9.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {

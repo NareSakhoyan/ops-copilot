@@ -62,6 +62,36 @@ The four authenticated `/rest/` mock Bitrix methods run in this app and reuse CR
 
 Run `npx vitest run tests/approvals.test.ts` for the complete proposal → approval → task → audit integration scenarios. Tests use disposable PostgreSQL and do not alter the development database.
 
+## Knowledge base
+
+Ten synthetic Armenian/English documents are provided in `kb/`, including one manager/admin-only policy. Configure the Google key and explicit project embedding quotas in `.env`, run `npm run embed:check`, and choose `KB_REFUSAL_THRESHOLD` before answering. Then ingest with `npm run kb:ingest -- ./kb --tenant-id <uuid> --user-id <admin-uuid>`. Ingestion reuses unchanged vectors; retrieval applies tenant/current-role ACLs in SQL; answers include citations or refuse insufficient evidence without a chat call. See [docs/knowledge-base.md](docs/knowledge-base.md) for setup and verification. No KB HTTP endpoint is exposed yet.
+
+The live calibration run on 2026-10-23 returned **1536 dimensions**. Each language used five related query/passage pairs and twenty unrelated comparisons:
+
+| Language | Related cosine similarity | Unrelated cosine similarity |
+| --- | --- | --- |
+| Armenian | 0.744–0.852 | 0.516–0.623 |
+| English | 0.713–0.820 | 0.459–0.577 |
+
+Use this provisional setting in `.env`:
+
+```dotenv
+KB_REFUSAL_THRESHOLD=0.67
+```
+
+It separates every related and unrelated comparison in this small sample: the highest unrelated score was 0.623, and the lowest related score was 0.713. Similarity is not a probability or a confidence percentage. Validate this threshold against actual, longer KB chunks using answerable, unrelated, and closely related but unanswerable questions in Armenian and English, plus cross-language retrieval. Recalibrate when changing the embedding model or dimension.
+
+After database setup and seeding, ingest the KB for Ararat Trade:
+
+```sh
+npm run db:migrate
+npm run kb:ingest -- ./kb \
+  --tenant-id a0000000-0000-4000-8000-000000000001 \
+  --user-id a0000000-0000-4000-8000-000000000002
+```
+
+Repeat the ingestion command without changing the documents; expect `documents: 10, skipped: 10, embedded: 0`.
+
 ## Verification and production build
 
 ```sh
@@ -101,4 +131,4 @@ tests/
 docs/
 ```
 
-The database module contains the Drizzle schema, tenant client, and migration tooling. `auth/` contains authentication and RBAC; `approvals/` validates and executes approved proposals; `mock-bitrix/` provides CRM-backed mock operations; `observability/audit.ts` writes transactional audit events. The SQL guard validates and runs scoped analytics; agent/RAG modules remain placeholders for future features. See [AGENTS.md](AGENTS.md) for development rules and [docs/decisions.md](docs/decisions.md) for recorded decisions.
+The database module contains the Drizzle schema, tenant client, and migration tooling. `auth/` contains authentication and RBAC; `approvals/` validates and executes approved proposals; `mock-bitrix/` provides CRM-backed mock operations; `observability/audit.ts` writes transactional audit events. The SQL guard validates and runs scoped analytics; `rag/` provides KB ingestion, retrieval, and cited answers. The agent module remains a placeholder. See [AGENTS.md](AGENTS.md) for development rules and [docs/decisions.md](docs/decisions.md) for recorded decisions.

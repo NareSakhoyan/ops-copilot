@@ -25,7 +25,7 @@ The `users`, `roles`, and `permissions` tables describe application RBAC; they a
 
 ## Schema conventions
 
-All 21 tables have a generated UUID primary key and `created_at`/`updated_at` timestamps with time zones. Drizzle sets `updated_at` on updates; raw SQL must set it explicitly. All tables except `tenants` require `tenant_id` and have a unique `(tenant_id, id)` constraint. References to tenant-scoped rows use explicit composite foreign keys, for example `contacts(tenant_id, company_id)` to `companies(tenant_id, id)`. References to the root tenant use its primary key. Deletion uses PostgreSQL's restrictive default; nothing cascades automatically.
+All 23 tables have a generated UUID primary key and `created_at`/`updated_at` timestamps with time zones. Drizzle sets `updated_at` on updates; raw SQL must set it explicitly. All tables except `tenants` require `tenant_id` and have a unique `(tenant_id, id)` constraint. References to tenant-scoped rows use explicit composite foreign keys, for example `contacts(tenant_id, company_id)` to `companies(tenant_id, id)`. References to the root tenant use its primary key. Deletion uses PostgreSQL's restrictive default except document deletion cascades to its chunks.
 
 Nullable reference columns allow incomplete CRM records. Required references are marked below. UUIDs and timestamps are omitted from the table descriptions because they are common to all records.
 
@@ -52,6 +52,8 @@ Nullable reference columns allow incomplete CRM records. Required references are
 | `refresh_tokens` | Required user, SHA-256 token hash unique within the tenant, family UUID, absolute expiration time, optional used/revoked times; raw tokens are not stored. |
 | `pending_actions` | Required requester user, `task.create` type, object JSONB payload, status, attempts (0–3), nullable error/decision/execution timestamps, expiry defaulting to 24 hours after creation. The proposal UUID is its idempotency key. |
 | `sql_execution_log` | Required user/request UUIDs, nullable question, submitted SQL, verdict (`accepted`/`rejected`/`error`), returned rows (0–200), nonnegative duration in milliseconds, nullable safe error. Required composite reference to the tenant-local user. |
+| `documents` | Title, tenant-unique source filename, nonempty allowed role array, content hash, embedding model metadata; tenant RLS. |
+| `chunks` | Composite tenant/document FK with cascade, positive ordinal unique per document, text/content hash, non-null `vector(1536)`; tenant RLS. |
 
 Deal statuses are `open`, `won`, `lost`; task statuses are `todo`, `in_progress`, `done`, `cancelled`; activity types are `call`, `email`, `meeting`. SQL CHECK constraints enforce these values. Leads and orders have no workflow status columns. Overdue tasks are derived using `due_at < now()` and `status IN ('todo', 'in_progress')`.
 
@@ -145,4 +147,16 @@ Tenant RLS applies to every underlying table. View predicates additionally requi
 
 Tests cover empty-database migrations, repeat migration runs, bootstrap roles and DML grants, role switching, cross-tenant foreign-key rejection in CRM and RBAC, mandatory tenant IDs, unique identifiers, status/type/money checks, and the four query indexes.
 
-All 20 tenant-scoped tables enable RLS with one tenant policy each, and authenticated application queries use transaction-local context through `withTenant`. Composite foreign keys additionally prevent cross-tenant references. Authentication uses a separate tenant-only transaction for credential lookup, then sets the verified user ID. JWT authentication, refresh rotation/reuse detection, RBAC, and transactional audit writing are implemented and tested through a real `app_user` connection. Approval tests cover database constraints, tenant/department authorization, concurrent/conflicting decisions, permission revalidation, three-attempt retry limits, timeout-after-write idempotency, expiry, rejection, and audit rollback. The mock reuses CRM tables inside the existing app. `npm run db:seed` creates deterministic synthetic CRM data through `withTenant` as `app_user`; [seed-scenarios.md](seed-scenarios.md) lists counts, accounts, and verified scenario results. Analytics tests cover the AST guard, exact grants, role scopes, logging, and a real five-second timeout. See [security.md](security.md) for security boundaries and [api.md](api.md) for endpoint contracts.
+All 22 tenant-scoped tables enable RLS with one tenant policy each, and authenticated application queries use transaction-local context through `withTenant`. Composite foreign keys additionally prevent cross-tenant references. Authentication uses a separate tenant-only transaction for credential lookup, then sets the verified user ID. JWT authentication, refresh rotation/reuse detection, RBAC, and transactional audit writing are implemented and tested through a real `app_user` connection. Approval tests cover database constraints, tenant/department authorization, concurrent/conflicting decisions, permission revalidation, three-attempt retry limits, timeout-after-write idempotency, expiry, rejection, and audit rollback. The mock reuses CRM tables inside the existing app. `npm run db:seed` creates deterministic synthetic CRM data through `withTenant` as `app_user`; [seed-scenarios.md](seed-scenarios.md) lists counts, accounts, and verified scenario results. Analytics tests cover the AST guard, exact grants, role scopes, logging, and a real five-second timeout. See [security.md](security.md) for security boundaries and [api.md](api.md) for endpoint contracts.
+
+## Knowledge indexes
+
+- `documents_pkey` on `(id)` identifies a KB document.
+- `documents_tenant_id_id_unique` on `(tenant_id, id)` supports composite chunk foreign keys.
+- `documents_tenant_source_unique` on `(tenant_id, source)` prevents duplicate document sources and supports incremental lookup.
+- `chunks_pkey` on `(id)` identifies a retrieved passage.
+- `chunks_tenant_id_id_unique` on `(tenant_id, id)` supplies tenant-scoped chunk identity.
+- `chunks_document_ordinal_unique` on `(tenant_id, document_id, ordinal)` enforces passage order and supports document/chunk lookups.
+- `chunks_embedding_hnsw_idx` uses HNSW `vector_cosine_ops` for cosine search; current small-corpus retrieval uses exact ordering to avoid filtered approximate-candidate loss.
+
+KB ingestion and retrieval enforce tenant RLS and role ACLs; see [knowledge-base.md](knowledge-base.md). Analytics grants exclude all document/chunk columns.

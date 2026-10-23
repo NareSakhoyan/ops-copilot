@@ -5,12 +5,13 @@ import { analyticsViews } from './schema/analytics.js';
 import * as approvals from './schema/approvals.js';
 import * as crm from './schema/crm.js';
 import * as identity from './schema/identity.js';
+import * as knowledge from './schema/knowledge.js';
 import * as orders from './schema/orders.js';
 import * as security from './schema/security.js';
 import * as tenants from './schema/tenants.js';
 import * as workforce from './schema/workforce.js';
 
-const tables = Object.values({ ...analyticsLog, ...approvals, ...crm, ...identity, ...orders, ...security, ...tenants, ...workforce });
+const tables = Object.values({ ...analyticsLog, ...approvals, ...crm, ...identity, ...knowledge, ...orders, ...security, ...tenants, ...workforce });
 const columns = new Map<string, Set<string>>();
 const visited = new Set<unknown>();
 

@@ -12,7 +12,7 @@ Bootstrap grants table SELECT/INSERT/UPDATE/DELETE to `app_user`, not ownership,
 
 ## Policies
 
-All 20 tables containing `tenant_id`, including `pending_actions` and `sql_execution_log`, enable RLS in Drizzle using the installed 0.45 API's `.enableRLS()`. Existing PostgreSQL roles are declared with `pgRole('app_user').existing()` and the equivalent declaration for `analytics_ro`, so Drizzle does not recreate them.
+All 22 tables containing `tenant_id`, including `pending_actions` and `sql_execution_log`, enable RLS in Drizzle using the installed 0.45 API's `.enableRLS()`. Existing PostgreSQL roles are declared with `pgRole('app_user').existing()` and the equivalent declaration for `analytics_ro`, so Drizzle does not recreate them.
 
 Each tenant table has one permissive FOR ALL policy targeting both roles, with identical USING and WITH CHECK expressions:
 
@@ -132,3 +132,9 @@ Execution uses `withTenant` and a savepoint: bind the trusted analytics scope, S
 `sql_execution_log` has tenant RLS, a tenant-local actor foreign key, request ID, optional question (NULL when absent), submitted SQL, verdict, row count, duration, and a safe static error. Invalid SQL is logged before execution; SQL errors omit raw backend messages, which may contain values. Submitted SQL and questions can contain sensitive literals, so these application-only records are excluded from analytics grants. Invalid/unavailable server identities cannot create attributed execution records.
 
 **Database boundary:** PostgreSQL requires column SELECT on underlying tables for invoker views. As explicitly agreed, analytics_ro can directly read those granted columns. It cannot SELECT * where excluded columns exist, read excluded columns or unrelated application tables, or modify application data. Tenant RLS applies to direct granted-column reads with an unchanged tenant context. View-only access, department/employee scopes, viewer aggregation, and prevention of role/GUC changes also depend on the validator and trusted runner. Standard PostgreSQL catalog/function visibility is not removed globally; the validator rejects catalog relations and unsafe functions. An unrestricted raw SQL channel could alter custom settings or reset its role, so these grants are defense in depth rather than a sandbox for arbitrary SQL. See [PostgreSQL's invoker-view rules](https://www.postgresql.org/docs/18/sql-createview.html).
+
+## Knowledge access and untrusted retrieval
+
+Documents and chunks enable tenant RLS as non-owner `app_user`; missing context yields zero rows. Composite tenant/document FKs prevent cross-tenant linkage. The analytics role receives no KB column or table privileges. Document allowed_roles ACLs are enforced by trusted search SQL (not a separate PostgreSQL role policy), with current memberships reloaded from the tenant database before top-k. No caller-provided or LLM-provided role list controls retrieval. Tenant admins alone may ingest through the flagged CLI.
+
+Search also filters by embedding model. An explicit threshold is required before answering; empty or weak authorized results return fixed refusal without a chat call. Excerpts are JSON-encoded between unpredictable delimiters and labeled untrusted data. The chat model has no executable tools. Returned citations must match retrieved labels; this verifies citation identity, not factual entailment or immunity to every prompt injection. Synthetic attack examples and mocked-model tests do not establish live-model robustness. Google credentials and raw credential-bearing SDK causes are never logged. See [knowledge-base.md](knowledge-base.md) for quota persistence and setup.

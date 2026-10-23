@@ -15,7 +15,7 @@ import { departments, employees } from '../src/db/schema/workforce.js';
 import { runMigrations, startTestDatabase } from './helpers/database.js';
 
 const expectedTables = [
-  'activities', 'audit_logs', 'companies', 'contacts', 'deals', 'departments', 'employees',
+  'activities', 'audit_logs', 'chunks', 'companies', 'contacts', 'deals', 'departments', 'documents', 'employees',
   'leads', 'order_items', 'orders', 'pending_actions', 'permissions', 'products', 'refresh_tokens',
   'role_permissions', 'roles', 'sql_execution_log', 'tasks', 'tenants', 'user_roles', 'users',
 ].sort();
