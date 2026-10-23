@@ -36,7 +36,7 @@ docker compose up -d --wait db
 npm run db:migrate
 ```
 
-Generate a migration after changing the Drizzle schema with `npm run db:generate`. Migrations use the owner-only `MIGRATION_DATABASE_URL`, followed by the currently empty grants step. Tenant tables enforce RLS; application operations use `withTenant(ctx, fn)` and a separate `DATABASE_URL` naming `app_user`. Provision that login's password before using database operations, following [docs/security.md](docs/security.md). Explicit analytics table grants remain deferred. See [docs/database.md](docs/database.md) for the schema, indexes, roles, and migration lifecycle.
+Generate a migration after changing the Drizzle schema with `npm run db:generate`. Migrations use the owner-only `MIGRATION_DATABASE_URL`, followed by the derived analytics column/view grants. Tenant tables enforce RLS; application operations use `withTenant(ctx, fn)` and a separate `DATABASE_URL` naming `app_user`. Provision that login's password before using database operations, following [docs/security.md](docs/security.md). Analytics queries use four redacted invoker views, scoped context, AST validation, a 200-row cap, and a five-second timeout; see [docs/security.md](docs/security.md#guarded-sql-analytics). See [docs/database.md](docs/database.md) for the schema, indexes, roles, and migration lifecycle.
 
 ## Authentication and audit
 
@@ -101,4 +101,4 @@ tests/
 docs/
 ```
 
-The database module contains the Drizzle schema, tenant client, and migration tooling. `auth/` contains authentication and RBAC; `approvals/` validates and executes approved proposals; `mock-bitrix/` provides CRM-backed mock operations; `observability/audit.ts` writes transactional audit events. Agent/RAG/SQL-guard modules remain placeholders for future features. See [AGENTS.md](AGENTS.md) for development rules and [docs/decisions.md](docs/decisions.md) for recorded decisions.
+The database module contains the Drizzle schema, tenant client, and migration tooling. `auth/` contains authentication and RBAC; `approvals/` validates and executes approved proposals; `mock-bitrix/` provides CRM-backed mock operations; `observability/audit.ts` writes transactional audit events. The SQL guard validates and runs scoped analytics; agent/RAG modules remain placeholders for future features. See [AGENTS.md](AGENTS.md) for development rules and [docs/decisions.md](docs/decisions.md) for recorded decisions.

@@ -152,7 +152,7 @@ describe('tenant row-level security through a real app_user login', () => {
     const rows = z.array(z.object({ name: z.string(), enabled: z.boolean(), forced: z.boolean(), policies: z.number() })).parse(result.rows);
     expect(rows.find((row) => row.name === 'tenants')).toEqual({ name: 'tenants', enabled: false, forced: false, policies: 0 });
     const tenantTables = rows.filter((row) => row.name !== 'tenants');
-    expect(tenantTables).toHaveLength(19);
+    expect(tenantTables).toHaveLength(20);
     for (const row of tenantTables) {
       expect(row, row.name).toMatchObject({ enabled: true, forced: false, policies: 1 });
     }
@@ -162,7 +162,7 @@ describe('tenant row-level security through a real app_user login', () => {
     const policies = z.array(z.object({
       tablename: z.string(), roles: z.array(z.string()), cmd: z.literal('ALL'), qual: z.string(), with_check: z.string(),
     })).parse(policyResult.rows);
-    expect(policies).toHaveLength(19);
+    expect(policies).toHaveLength(20);
     for (const policy of policies) {
       expect(policy.roles.sort(), policy.tablename).toEqual(['analytics_ro', 'app_user']);
       expect(policy.qual, policy.tablename).toBe(policy.with_check);
@@ -229,7 +229,7 @@ describe('tenant row-level security through a real app_user login', () => {
   });
 
   it('applies the same policy to analytics SELECT when a table grant is present', async () => {
-    // Grant only within this isolated test database; production analytics grants remain explicit.
+    // Broaden to a table grant only inside this test; normal analytics grants are column-scoped.
     await ownerDb.execute(sql`GRANT SELECT ON deals TO analytics_ro`);
     try {
       const result = await appClient.withTenant(contextA, async (tx) => {

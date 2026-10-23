@@ -51,7 +51,7 @@ describe('development seed', () => {
       departments: 2, employees: 12, users: 12, roles: 4, permissions: 9,
       user_roles: 12, role_permissions: 25, companies: 150, contacts: 400,
       leads: 500, deals: 600, activities: 1500, tasks: 500, products: 40,
-      orders: 300, order_items: 600, audit_logs: 1, pending_actions: 0, refresh_tokens: 0,
+      orders: 300, order_items: 600, audit_logs: 1, pending_actions: 0, refresh_tokens: 0, sql_execution_log: 0,
     };
     await client.withTenant({ tenant_id: tenant.id, user_id: tenant.adminId }, async (tx) => {
       for (const [table, expectedCount] of Object.entries(expected)) {

@@ -17,7 +17,7 @@ import { runMigrations, startTestDatabase } from './helpers/database.js';
 const expectedTables = [
   'activities', 'audit_logs', 'companies', 'contacts', 'deals', 'departments', 'employees',
   'leads', 'order_items', 'orders', 'pending_actions', 'permissions', 'products', 'refresh_tokens',
-  'role_permissions', 'roles', 'tasks', 'tenants', 'user_roles', 'users',
+  'role_permissions', 'roles', 'sql_execution_log', 'tasks', 'tenants', 'user_roles', 'users',
 ].sort();
 
 function fixtureIds() {
@@ -135,7 +135,7 @@ describe('owner migrations and bootstrap', () => {
     });
   });
 
-  it('leaves analytics table grants empty for now', async () => {
+  it('keeps unrelated company tables inaccessible to analytics', async () => {
     await expect(db.transaction(async (tx) => {
       await tx.execute(sql`SET LOCAL ROLE analytics_ro`);
       await tx.select().from(companies);

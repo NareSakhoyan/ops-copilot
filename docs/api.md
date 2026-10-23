@@ -153,6 +153,22 @@ The shared preHandler constructs `RequestContext { tenantId, userId, employeeId,
 
 The mock routes demonstrate scoped CRM reads. Future routes/tools must call `can` and apply `scopeFilter` to queries. Only aggregate-producing queries may request aggregate scope; passing that mode does not itself convert a row query into an aggregate. The caller supplies the appropriate assignment column, for example `deals.responsibleEmployeeId` or `tasks.assigneeEmployeeId`. Without an assignment column, employee/department row scopes fail closed.
 
+## Internal SQL analytics API
+
+The future SQL Analytics Tool calls `runAnalyticsQuery(request.context, sql, question?)` from `src/sql-guard/execute.ts`. This change adds no HTTP SQL endpoint. The optional question is stored in `sql_execution_log`, or NULL when omitted. Results are arrays of at most 200 row objects; PostgreSQL money/numeric/bigint values may be strings.
+
+```ts
+const rows = await runAnalyticsQuery(ctx,
+  "SELECT currency, status, count(*) AS total, sum(amount) AS amount FROM v_deals GROUP BY currency, status",
+  'Համեմատիր գործարքների կարգավիճակները / Compare deal statuses');
+```
+
+Sources are `v_deals`, `v_tasks`, `v_contacts_activity`, and `v_employee_performance`; their fields are documented in [database.md](database.md#analytics-views). Examples include unfinished tasks where `due_at < now()`, contacts where `last_activity_at IS NULL OR last_activity_at < now() - interval '14 days'`, and department/currency won revenue from `v_employee_performance`. Tenant/department/own-record scope comes from refreshed server identity, never SQL parameters supplied as identity.
+
+All calls require `deals:aggregate`. Detail reads also require the view's resource read permission. Viewers can run the conservative aggregate-only subset, including currency/status/department/date groups, but cannot retrieve individual IDs/names or employee-level performance rows. See [security.md](security.md#guarded-sql-analytics) for the exact allowlist and role behavior.
+
+The runner logs rejected SQL/authorization attempts and query errors before throwing. Errors are 400 for unsupported/unsafe input or viewer detail requests, 403 for missing permissions, 422 for execution/schema errors, and 504 for the five-second timeout. Logging failures propagate rather than returning an unaudited result. Queries use bound literals and a regenerated, capped AST; no user SQL reaches execution unchanged.
+
 ## Minimal local admin account
 
 For ready-made development accounts, run `npm run db:seed` after migrations and database password setup; see [seed-scenarios.md](seed-scenarios.md) for tenant UUIDs and credentials. The following is an optional manual provisioning alternative. First run migrations and provision the PostgreSQL `app_user` password as described in [security.md](security.md). Generate an Argon2 hash interactively (the password is read from terminal input, not passed in shell arguments):
