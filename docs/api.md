@@ -192,7 +192,7 @@ console.log(await hash(password));
 Then open the administrative database console:
 
 ```sh
-docker compose exec db psql -U migration_owner -d ops_copilot
+docker compose exec postgres psql -U migration_owner -d ops_copilot
 ```
 
 Run this command **alone**, then paste the complete generated hash at its prompt:

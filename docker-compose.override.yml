@@ -1,0 +1,11 @@
+# Automatically merged by `docker compose` alongside docker-compose.yml (Compose's default
+# override-file convention). Local-dev convenience only: publishes postgres's port to localhost
+# so `npm run dev`/`npm test` running directly on the host (not in a container) can still reach
+# it at 127.0.0.1, matching this project's pre-existing non-containerized workflow (see
+# README.md "PostgreSQL", docs/database.md). A real deployment should exclude this file, e.g.
+# `docker compose -f docker-compose.yml up -d --wait`, or `COMPOSE_FILE=docker-compose.yml`, so
+# postgres is never reachable from outside the compose network (see docs/operations.md).
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"

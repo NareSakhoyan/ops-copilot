@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { loadEnvironment } from '../config.js';
 import { EMBED_DIM, parseEmbeddingConfig } from './config.js';
 import { createQuotaLimiter, delay } from './quota.js';
+import { computeBackoffMs } from '../net/retry.js';
 
 export interface Embedder {
   readonly model: string;
@@ -52,7 +53,7 @@ export function createGoogleEmbedder(config = parseEmbeddingConfig(loadEnvironme
         }
         const header = details.success ? details.data.responseHeaders?.['retry-after'] : undefined;
         const retryAfter = header ? (/^\d+(\.\d+)?$/.test(header) ? Number(header) * 1000 : Math.max(0, Date.parse(header) - now())) : 0;
-        const wait = Math.max(1000 * 2 ** attempt, Number.isFinite(retryAfter) ? retryAfter : 0);
+        const wait = Math.max(computeBackoffMs(attempt), Number.isFinite(retryAfter) ? retryAfter : 0);
         if (wait > 60000) {
           await quota.blockUntil(now() + wait);
           // eslint-disable-next-line preserve-caught-error -- Do not retain credential-bearing SDK causes.

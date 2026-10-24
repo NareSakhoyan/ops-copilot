@@ -1,5 +1,6 @@
 import { setTimeout } from 'node:timers/promises';
 import { and, eq, lt, sql } from 'drizzle-orm';
+import { computeBackoffMs } from '../net/retry.js';
 import type { RequestContext } from '../auth/context.js';
 import type { TenantDatabase, TenantTransaction } from '../db/client.js';
 import { pendingActions } from '../db/schema/approvals.js';
@@ -49,7 +50,7 @@ export async function executeApproval(database: TenantDatabase, mock: MockBitrix
         await writeAudit(tx, ctx, { action: 'approval.attempt_failed', entityType: 'pending_action', entityId: action.id, metadata: { attempt: attempted.attempts, retry } });
       });
       if (!retry) return finish('failed', message);
-      await setTimeout(250 * 2 ** (attempted.attempts - 1));
+      await setTimeout(computeBackoffMs(attempted.attempts - 1, { baseMs: 250 }));
       continue;
     }
     // Audit/commit failures here must propagate; the task may already exist.

@@ -1,12 +1,36 @@
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  migration_database_url:
+    file: ./secrets/migration_database_url.txt
+  database_url:
+    file: ./secrets/database_url.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+  refresh_token_pepper:
+    file: ./secrets/refresh_token_pepper.txt
+
+networks:
+  # A plain user-defined bridge, not Docker's internal:true (which would also block the api
+  # container's own outbound calls to an LLM/embeddings provider). "Internal" here just means:
+  # only the ports explicitly published below reach the host; postgres is reachable from other
+  # services by name (postgres:5432) but never from outside this network.
+  internal:
+
+volumes:
+  postgres_data:
+
 services:
-  db:
+  postgres:
     image: pgvector/pgvector:pg18
     environment:
       POSTGRES_USER: migration_owner
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    secrets:
+      - postgres_password
+    networks:
+      - internal
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./docker/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
@@ -15,14 +39,126 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+
+  migrate:
+    build: .
+    command: ["node", "dist/db/migrate.js"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      MIGRATION_DATABASE_URL_FILE: /run/secrets/migration_database_url
+    secrets:
+      - migration_database_url
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+
+  # Explicit one-off, never started by a normal `docker compose up` (profiles: tools). Builds
+  # from the Dockerfile's intermediate "build" stage, which still has devDependencies
+  # (@faker-js/faker, tsx) that the pruned production image deliberately excludes. Run with:
+  # `docker compose run --rm seed`. Refuses to run when NODE_ENV=production (src/db/seed/run.ts).
+  seed:
+    build:
+      context: .
+      target: build
+    command: ["node", "dist/db/seed/run.js"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL_FILE: /run/secrets/database_url
+    secrets:
+      - database_url
+    networks:
+      - internal
+    profiles: ["tools"]
+    restart: "no"
+
+  api:
+    build: .
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      HOST: 0.0.0.0
+      PORT: ${PORT:-3000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL_FILE: /run/secrets/database_url
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      REFRESH_TOKEN_PEPPER_FILE: /run/secrets/refresh_token_pepper
+      JWT_ISSUER: ${JWT_ISSUER:-ops-copilot}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-ops-copilot-api}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_MODEL: ${LLM_MODEL:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY:-}
+      AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
+      GOOGLE_VERTEX_PROJECT: ${GOOGLE_VERTEX_PROJECT:-}
+      GOOGLE_VERTEX_LOCATION: ${GOOGLE_VERTEX_LOCATION:-}
+      # Set to a path under a mounted secret (e.g. /run/secrets/vertex_sa_json) when using
+      # LLM_PROVIDER=vertex off-GCP; see docs/operations.md. Never put the JSON itself here.
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      EMBED_MODEL: ${EMBED_MODEL:-gemini-embedding-001}
+      EMBED_DIM: ${EMBED_DIM:-1536}
+      EMBED_RPM: ${EMBED_RPM:-}
+      EMBED_RPD: ${EMBED_RPD:-}
+      EMBED_TPM: ${EMBED_TPM:-}
+      KB_REFUSAL_THRESHOLD: ${KB_REFUSAL_THRESHOLD:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-ops-copilot}
+      LLM_PRICE_TABLE_JSON: ${LLM_PRICE_TABLE_JSON:-}
+      # Reverse proxy in front of this API: set to "true" or the proxy's IP/CIDR so rate limiting
+      # keys on the real client IP from X-Forwarded-For. Left false for a directly published port.
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+    secrets:
+      - database_url
+      - jwt_secret
+      - refresh_token_pepper
+    networks:
+      - internal
+    ports:
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/health/ready').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
 
   jaeger:
     image: jaegertracing/all-in-one:1.65.0
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+    networks:
+      - internal
     ports:
-      - "127.0.0.1:16686:16686" # Jaeger UI
-      - "127.0.0.1:4318:4318" # OTLP HTTP receiver, matches OTEL_EXPORTER_OTLP_ENDPOINT
-
-volumes:
-  postgres_data:
+      - "127.0.0.1:16686:16686" # Jaeger UI only; OTLP (4318) stays internal-only, reached as http://jaeger:4318
+    # No healthcheck: jaegertracing/all-in-one's binary is the container's only executable (no
+    # shell/curl/wget), so no CMD-based probe is possible in this image. See docs/operations.md.
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"

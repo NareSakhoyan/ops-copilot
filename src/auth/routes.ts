@@ -58,7 +58,7 @@ export function registerAuth(app: FastifyInstance, database: TenantDatabase, con
       reply.header('Cache-Control', 'no-store');
       return auth.login(request.body, request.id);
     });
-    routes.post('/auth/refresh', async (request, reply) => {
+    routes.post('/auth/refresh', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       return auth.refresh(request.body, request.id);
     });

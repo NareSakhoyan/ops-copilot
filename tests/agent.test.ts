@@ -30,7 +30,7 @@ import { MockLanguageModelV4, modelText, modelTool } from './helpers/model.js';
 
 const tenant = demoTenants[0];
 const other = demoTenants[1];
-const authConfig = parseAuthConfig({ JWT_SECRET: randomBytes(32).toString('hex') });
+const authConfig = parseAuthConfig({ JWT_SECRET: randomBytes(32).toString('hex'), REFRESH_TOKEN_PEPPER: randomBytes(32).toString('hex') });
 const invocation = { toolCallId: 'test', messages: [], context: {} };
 let container: StartedPostgreSqlContainer;
 let ownerPool: Pool;

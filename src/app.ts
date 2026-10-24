@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
 import type { FastifyBaseLogger } from 'fastify';
 import { pino } from 'pino';
@@ -17,6 +20,8 @@ import { registerMockBitrix } from './mock-bitrix/routes.js';
 import type { LanguageModel } from 'ai';
 import { createAgentService } from './agent/service.js';
 import { registerChat } from './agent/routes.js';
+import { registerHealth } from './health.js';
+import type { HealthDeps } from './health.js';
 import { fastifyOtelInstrumentation, shutdownTracing } from './observability/tracing.js';
 import { registerMetricsRoute, httpRequestCounter, httpRequestDuration } from './observability/metrics.js';
 import { redactValue } from './observability/redact.js';
@@ -24,7 +29,10 @@ import { redactValue } from './observability/redact.js';
 export function buildApp(
   config: AppConfig,
   logStream?: DestinationStream,
-  options: { authConfig?: AuthConfig; database?: TenantDatabase; mockBitrix?: MockBitrix; agentModel?: () => LanguageModel } = {},
+  options: {
+    authConfig?: AuthConfig; database?: TenantDatabase; mockBitrix?: MockBitrix;
+    agentModel?: () => LanguageModel; healthDeps?: HealthDeps;
+  } = {},
 ) {
   const logger: FastifyBaseLogger = pino({
     level: config.LOG_LEVEL,
@@ -36,10 +44,35 @@ export function buildApp(
     loggerInstance: logger,
     requestIdHeader: false,
     genReqId: () => randomUUID(),
+    trustProxy: config.TRUST_PROXY,
+    bodyLimit: config.BODY_LIMIT_BYTES,
   });
 
   // Registered before any routes so @fastify/otel can wrap every subsequent route definition.
   app.register(fastifyOtelInstrumentation.plugin());
+
+  app.register(helmet);
+  const allowedOrigins = config.CORS_ALLOWED_ORIGINS?.split(',').map((origin) => origin.trim()).filter(Boolean);
+  // No configured allowlist means no cross-origin access; this API has no browser frontend by default.
+  app.register(cors, { origin: allowedOrigins && allowedOrigins.length > 0 ? allowedOrigins : false });
+
+  // Global default; /auth/login, /auth/refresh, and /chat layer stricter per-route/per-user limits on top.
+  // Never skip this in production: RATE_LIMIT_TEST_BYPASS only has effect outside NODE_ENV=production.
+  const skipGlobalRateLimit = config.RATE_LIMIT_TEST_BYPASS && config.NODE_ENV !== 'production';
+  if (!skipGlobalRateLimit) {
+    // global:true's automatic per-route apply relies on an onRoute hook installed while the
+    // plugin boots, which is deferred; buildApp is synchronous and declares routes immediately
+    // afterward, so that boot would race every route declared below and silently rate-limit
+    // nothing. Register with global:false and apply the default policy via our own hook instead,
+    // resolving the `rateLimit` decorator lazily (it only exists once the plugin has booted,
+    // guaranteed by the time the first real request arrives).
+    app.register(rateLimit, { global: false, max: config.RATE_LIMIT_MAX, timeWindow: config.RATE_LIMIT_WINDOW_MS });
+    let defaultRateLimit: ReturnType<typeof app.rateLimit> | undefined;
+    app.addHook('onRequest', async (request, reply) => {
+      defaultRateLimit ??= app.rateLimit();
+      await defaultRateLimit.call(app, request, reply);
+    });
+  }
 
   app.addHook('onRequest', (request, reply, done) => {
     reply.header('X-Request-ID', request.id);
@@ -53,6 +86,7 @@ export function buildApp(
   });
 
   app.get('/health', () => ({ status: 'ok' as const }));
+  registerHealth(app, options.healthDeps);
   registerMetricsRoute(app);
   const db = options.database ?? database;
   registerAuth(app, db, options.authConfig ?? loadAuthConfig());
@@ -60,7 +94,9 @@ export function buildApp(
   registerMockBitrix(app, mock);
   const proposals = createApprovalsService(db, mock);
   registerApprovals(app, proposals);
-  registerChat(app, createAgentService({ database: db, proposals, ...(options.agentModel ? { model: options.agentModel } : {}) }));
+  registerChat(app, createAgentService({ database: db, proposals, ...(options.agentModel ? { model: options.agentModel } : {}) }), {
+    max: config.RATE_LIMIT_CHAT_MAX, timeWindow: config.RATE_LIMIT_WINDOW_MS, skip: skipGlobalRateLimit,
+  });
 
   app.addHook('onClose', closeDatabase);
   app.addHook('onClose', shutdownTracing);

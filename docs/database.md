@@ -2,10 +2,10 @@
 
 ## Local startup and migrations
 
-The required `.env` contains `POSTGRES_DB`, `POSTGRES_PORT`, `POSTGRES_PASSWORD`, and `MIGRATION_DATABASE_URL`; `.env.example` includes local development values. Keep the URL's database, port, and password consistent with the Compose settings. Compose binds PostgreSQL to `127.0.0.1`.
+The required `.env` contains `POSTGRES_DB`, `POSTGRES_PORT`, `POSTGRES_PASSWORD`, and `MIGRATION_DATABASE_URL`; `.env.example` includes local development values. Keep the URL's database, port, and password consistent with the Compose settings. `docker-compose.override.yml` (auto-merged locally) binds PostgreSQL to `127.0.0.1` for this host-side workflow; the base `docker-compose.yml` used for a real deployment does not publish it at all (see [docs/operations.md](operations.md)).
 
 ```sh
-docker compose up -d --wait db
+docker compose up -d --wait postgres
 npm run db:migrate
 ```
 

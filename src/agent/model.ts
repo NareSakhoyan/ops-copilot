@@ -2,6 +2,7 @@ import { createGoogle } from '@ai-sdk/google';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createGateway, type LanguageModel } from 'ai';
+import { MockLanguageModelV4 } from 'ai/test';
 import { SpanStatusCode } from '@opentelemetry/api';
 import { z } from 'zod';
 import { loadEnvironment } from '../config.js';
@@ -9,13 +10,48 @@ import { tracer } from '../observability/tracing.js';
 import { computeCostUsd } from '../observability/cost.js';
 import { llmTokenCounter } from '../observability/metrics.js';
 
+const providerSchema = z.object({
+  LLM_PROVIDER: z.enum(['ollama', 'google', 'gateway', 'vertex', 'mock']).default('ollama'),
+  LLM_MODEL: z.string().trim().min(1).optional(),
+});
+
+/**
+ * Validates provider configuration (required env vars per provider) without constructing an SDK
+ * client or making a network call, so it is safe to run on every /health/ready probe.
+ */
+export function validateChatModelConfig(environment = loadEnvironment()): void {
+  const config = providerSchema.parse(environment);
+  if (config.LLM_PROVIDER === 'gateway') z.string().trim().min(1).parse(environment.AI_GATEWAY_API_KEY);
+  else if (config.LLM_PROVIDER === 'vertex') {
+    z.object({ GOOGLE_VERTEX_PROJECT: z.string().trim().min(1), GOOGLE_VERTEX_LOCATION: z.string().trim().min(1) }).parse(environment);
+  } else if (config.LLM_PROVIDER === 'google') z.string().trim().min(1).parse(environment.GOOGLE_GENERATIVE_AI_API_KEY);
+  else if (config.LLM_PROVIDER === 'ollama') {
+    z.url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'OLLAMA_BASE_URL must use HTTP or HTTPS')
+      .default('http://127.0.0.1:11434/v1').parse(environment.OLLAMA_BASE_URL);
+  }
+}
+
 /** The single provider boundary for agent, SQL generation, and KB answering. */
 export function createChatModel(environment = loadEnvironment()): LanguageModel {
-  const config = z.object({
-    LLM_PROVIDER: z.enum(['ollama', 'google', 'gateway', 'vertex']).default('ollama'),
-    LLM_MODEL: z.string().trim().min(1).optional(),
-  }).parse(environment);
+  const config = providerSchema.parse(environment);
   const modelId = config.LLM_MODEL ?? (config.LLM_PROVIDER === 'ollama' ? 'gemma4:26b' : 'gemini-3.8-flash');
+  if (config.LLM_PROVIDER === 'mock') {
+    // Deterministic, network-free model for smoke tests/CI; never selectable in production.
+    if (String(environment.NODE_ENV ?? 'development') === 'production') {
+      throw new Error('LLM_PROVIDER=mock is not allowed when NODE_ENV=production.');
+    }
+    return new MockLanguageModelV4({
+      doGenerate: {
+        finishReason: { unified: 'stop' as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+        content: [{ type: 'text' as const, text: 'This is a mock response for smoke testing.' }],
+        warnings: [],
+      },
+    });
+  }
   if (config.LLM_PROVIDER === 'ollama') {
     const baseURL = z.url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol),
       'OLLAMA_BASE_URL must use HTTP or HTTPS').default('http://127.0.0.1:11434/v1').parse(environment.OLLAMA_BASE_URL);

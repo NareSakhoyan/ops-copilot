@@ -23,7 +23,15 @@ describe('environment validation', () => {
   it('provides the approved defaults', () => {
     expect(parseConfig({})).toEqual({
       NODE_ENV: 'development', HOST: '127.0.0.1', PORT: 3000, LOG_LEVEL: 'info',
+      TRUST_PROXY: false, BODY_LIMIT_BYTES: 1048576, CORS_ALLOWED_ORIGINS: undefined,
+      RATE_LIMIT_MAX: 300, RATE_LIMIT_WINDOW_MS: 60000, RATE_LIMIT_CHAT_MAX: 30, RATE_LIMIT_TEST_BYPASS: false,
     });
+  });
+
+  it.each([
+    [undefined, false], ['true', true], ['false', false], ['203.0.113.5', '203.0.113.5'],
+  ])('parses TRUST_PROXY %j as %j', (input, expected) => {
+    expect(parseConfig(input === undefined ? {} : { TRUST_PROXY: input }).TRUST_PROXY).toBe(expected);
   });
 
   it.each([

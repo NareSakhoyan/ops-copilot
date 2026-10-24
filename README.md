@@ -9,13 +9,13 @@ nvm use
 npm ci
 ```
 
-The local `.env` file is required and is already provided. On a fresh checkout, create it with `cp .env.example .env`, generate a signing secret with the command below, and set `JWT_SECRET` to its output before starting. Local environment files are ignored by Git. Process environment settings override values in `.env`; Zod validates the result before the server listens. Invalid configuration or a missing file prevents startup.
+The local `.env` file is required and is already provided. On a fresh checkout, create it with `cp .env.example .env`, generate a signing secret with the command below, and set `JWT_SECRET` and `REFRESH_TOKEN_PEPPER` (run the command twice, once for each) before starting. Local environment files are ignored by Git. Process environment settings override values in `.env`; Zod validates the result before the server listens. Invalid configuration or a missing file prevents startup.
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-After setting `JWT_SECRET`, start the API with `npm run dev`.
+After setting `JWT_SECRET` and `REFRESH_TOKEN_PEPPER`, start the API with `npm run dev`.
 
 Development logs use `pino-pretty`: INFO is green, WARN is yellow, and ERROR is red, with readable local timestamps and request IDs. `npm start` outputs structured JSON for production.
 
@@ -32,7 +32,7 @@ Returns HTTP 200 with `{"status":"ok"}`. Each request receives a server-generate
 The `.env` and `.env.example` contain local PostgreSQL development settings. Start PostgreSQL 18 with pgvector and apply the committed migrations:
 
 ```sh
-docker compose up -d --wait db
+docker compose up -d --wait postgres
 npm run db:migrate
 ```
 
@@ -42,7 +42,7 @@ Generate a migration after changing the Drizzle schema with `npm run db:generate
 
 Implemented endpoints: `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, and permission-gated `GET /audit-logs`. Login returns a 15-minute JWT and a random opaque refresh token. Refresh tokens rotate on each use; reuse revokes the entire family. Families expire seven days after login. Logout revokes the refresh family; access tokens retain their original expiry.
 
-Configure `JWT_SECRET` (at least 32 characters), `JWT_ISSUER` (default `ops-copilot`), and `JWT_AUDIENCE` (default `ops-copilot-api`). The local `.env` contains a signing secret; the example deliberately leaves it blank. Accounts are not created on startup. Use the development seed below or provision tenant users with Argon2 password hashes and tenant-local role/permission memberships before logging in. The approval migration grants the new workflow/read permissions to existing admin/manager/rep roles; roles created later need their grants provisioned explicitly. [docs/api.md](docs/api.md) contains request examples, the permission matrix, and a minimal local account-provisioning example. [docs/security.md](docs/security.md) explains request context, scoping, rate limiting, and token lifecycle limitations.
+Configure `JWT_SECRET` (at least 32 characters), `REFRESH_TOKEN_PEPPER` (also at least 32 characters; keys refresh-token hashing separately from the JWT signing key), `JWT_ISSUER` (default `ops-copilot`), and `JWT_AUDIENCE` (default `ops-copilot-api`). The local `.env` contains both secrets; the example deliberately leaves them blank. Accounts are not created on startup. Use the development seed below or provision tenant users with Argon2 password hashes and tenant-local role/permission memberships before logging in. The approval migration grants the new workflow/read permissions to existing admin/manager/rep roles; roles created later need their grants provisioned explicitly. [docs/api.md](docs/api.md) contains request examples, the permission matrix, and a minimal local account-provisioning example. [docs/security.md](docs/security.md) explains request context, scoping, rate limiting, and token lifecycle limitations.
 
 ## Development data
 
@@ -152,7 +152,7 @@ Chat is read-only by default. A task proposal requires `allowTaskDraft: true`, a
 Start Jaeger alongside PostgreSQL and open its UI once the app has handled a request:
 
 ```sh
-docker compose up -d --wait db jaeger
+docker compose up -d --wait postgres jaeger
 npm run dev
 ```
 
@@ -178,6 +178,27 @@ npm start
 ```
 
 The build emits ESM into `dist/`. `npm start` requires a `.env` file in the working directory too. Tests require a running Docker-compatible daemon; database tests use disposable PostgreSQL containers and do not use the development database.
+
+## Run in containers
+
+```sh
+cp .env.example .env
+./scripts/generate-secrets.sh
+docker compose up -d --wait postgres migrate
+docker compose exec postgres psql -U migration_owner -d "$POSTGRES_DB" -c "\password app_user"
+# replace secrets/database_url.txt with the password you just set, then:
+docker compose up -d --wait api
+curl http://127.0.0.1:3000/health/ready
+```
+
+This builds the multi-stage `Dockerfile` (non-root user, pinned `node:24.11.1-bookworm-slim`), runs the one-shot `migrate` service, and starts `api` plus `jaeger`. `postgres` is not published to the host; only `api` (`PORT`, default 3000) and Jaeger's UI (16686) are. Secrets (`JWT_SECRET`, `REFRESH_TOKEN_PEPPER`, DB passwords) are read from `VAR_FILE`s under `secrets/` (gitignored, mounted as Docker secrets), never baked into the image or passed as plain environment values; see [docs/operations.md](docs/operations.md) for the full setup, secret rotation, and known limits, and [docs/security.md](docs/security.md) for how each control works.
+
+`scripts/smoke.sh` runs this whole flow end-to-end from a clean state (including `docker compose down -v` first and last), using `LLM_PROVIDER=mock` and a disposable generated `app_user` password so it needs no external model credentials:
+
+```sh
+npm run build   # or: npm run lint && npm run typecheck && npm test
+scripts/smoke.sh
+```
 
 ## Git hooks
 

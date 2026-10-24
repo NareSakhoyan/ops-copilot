@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { hash, verify } from 'argon2';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -21,6 +21,12 @@ export class AuthenticationError extends Error {
   constructor(message = 'Invalid token') { super(message); }
 }
 
+// HMAC keyed by a dedicated pepper (never the JWT signing key) so a leaked database dump alone
+// cannot be used to compute matching hashes for guessed/brute-forced tokens.
+export function hashRefreshToken(config: AuthConfig, token: string): string {
+  return createHmac('sha256', config.REFRESH_TOKEN_PEPPER).update(token).digest('hex');
+}
+
 export function createAuthService(database: TenantDatabase, config: AuthConfig) {
   let dummyHash: Promise<string> | undefined;
 
@@ -28,7 +34,7 @@ export function createAuthService(database: TenantDatabase, config: AuthConfig) 
     const refreshToken = randomBytes(32).toString('base64url');
     await tx.insert(refreshTokens).values({
       tenantId: ctx.tenantId, userId: ctx.userId,
-      tokenHash: createHash('sha256').update(refreshToken).digest('hex'),
+      tokenHash: hashRefreshToken(config, refreshToken),
       ...(family === undefined ? {} : { familyId: family.familyId }),
       expiresAt: family?.expiresAt ?? new Date(Date.now() + 7 * 86400000),
     });
@@ -45,7 +51,7 @@ export function createAuthService(database: TenantDatabase, config: AuthConfig) 
   }
 
   async function findLockedToken(tx: TenantTransaction, tenantId: string, rawToken: string): Promise<StoredToken | null> {
-    const where = and(eq(refreshTokens.tenantId, tenantId), eq(refreshTokens.tokenHash, createHash('sha256').update(rawToken).digest('hex')));
+    const where = and(eq(refreshTokens.tenantId, tenantId), eq(refreshTokens.tokenHash, hashRefreshToken(config, rawToken)));
     const [candidate] = await tx.select().from(refreshTokens).where(where);
     if (!candidate) return null;
     // All refresh/logout operations lock the same family before changing any member.

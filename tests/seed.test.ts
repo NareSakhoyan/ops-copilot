@@ -120,7 +120,7 @@ describe('development seed', () => {
   });
 
   it.each(demoTenants)('provides working development logins and least-privilege grants for $name', async (tenant) => {
-    const auth = createAuthService(client, parseAuthConfig({ JWT_SECRET: randomBytes(32).toString('hex') }));
+    const auth = createAuthService(client, parseAuthConfig({ JWT_SECRET: randomBytes(32).toString('hex'), REFRESH_TOKEN_PEPPER: randomBytes(32).toString('hex') }));
     for (const [role, email] of Object.entries({ admin: 'admin@example.invalid', sales_manager: 'manager1@example.invalid', sales_rep: 'rep1@example.invalid', viewer: 'viewer@example.invalid' })) {
       const result = await auth.login({ tenantId: tenant.id, email, password: devPasswords[role as keyof typeof devPasswords] }, tenant.adminId);
       expect(result.accessToken).toBeTruthy();

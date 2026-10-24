@@ -27,7 +27,7 @@ const tenantId = randomUUID();
 const otherTenantId = randomUUID();
 const departmentId = randomUUID();
 const otherDepartmentId = randomUUID();
-const authConfig = parseAuthConfig({ JWT_SECRET: randomBytes(32).toString('hex') });
+const authConfig = parseAuthConfig({ JWT_SECRET: randomBytes(32).toString('hex'), REFRESH_TOKEN_PEPPER: randomBytes(32).toString('hex') });
 const actor = (role: string, department: string | null, tenant = tenantId) => ({ id: randomUUID(), employeeId: randomUUID(), role, departmentId: department, tenantId: tenant });
 const actors = {
   admin: actor('admin', null), manager: actor('sales_manager', departmentId),

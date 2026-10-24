@@ -12,7 +12,15 @@ export type TenantTransaction = Parameters<Parameters<NodePgDatabase['transactio
 
 export function createDbClient(databaseUrl: string, maxConnections = 10) {
   const config = parseDatabaseConfig({ DATABASE_URL: databaseUrl });
-  const pool = new Pool({ connectionString: config.DATABASE_URL, max: maxConnections });
+  const pool = new Pool({
+    connectionString: config.DATABASE_URL, max: maxConnections,
+    // Hard timeouts so a stalled/unreachable database fails fast rather than hanging a request.
+    // connectionTimeoutMillis bounds acquiring a connection; query_timeout is a client-side timer
+    // and, unlike statement_timeout/idle_in_transaction_session_timeout, does not set a server-side
+    // GUC — this intentionally leaves the SQL guard's own scoped 5s statement_timeout
+    // (src/sql-guard/execute.ts) as the only place that changes that setting.
+    connectionTimeoutMillis: 5000, query_timeout: 15000,
+  });
   const db = drizzle(pool);
 
   async function transaction<T>(tenantId: string, userId: string, fn: (tx: TenantTransaction) => Promise<T>): Promise<T> {
@@ -35,7 +43,20 @@ export function createDbClient(databaseUrl: string, maxConnections = 10) {
     return transaction(z.uuid().parse(tenantId), '', fn);
   }
 
-  return { db, withTenant, withAuthTenant, close: () => pool.end() };
+  // Low-privilege liveness/readiness probe: connectivity + schema presence only, no tenant
+  // context and no application data, so it needs no RLS grant and is safe to run unauthenticated.
+  async function checkHealth(): Promise<{ reachable: boolean; migrated: boolean }> {
+    try {
+      const result = await pool.query<{ migrated: boolean }>(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'tenants') AS migrated",
+      );
+      return { reachable: true, migrated: result.rows[0]?.migrated ?? false };
+    } catch {
+      return { reachable: false, migrated: false };
+    }
+  }
+
+  return { db, withTenant, withAuthTenant, checkHealth, close: () => pool.end() };
 }
 
 export type TenantDatabase = Pick<ReturnType<typeof createDbClient>, 'withTenant' | 'withAuthTenant'>;
@@ -56,6 +77,10 @@ export function withAuthTenant<T>(tenantId: string, fn: (tx: TenantTransaction) 
 }
 
 export const database: TenantDatabase = { withTenant, withAuthTenant };
+
+export function checkDatabaseHealth(): Promise<{ reachable: boolean; migrated: boolean }> {
+  return getClient().checkHealth();
+}
 
 export async function closeDatabase(): Promise<void> {
   const client = defaultClient;

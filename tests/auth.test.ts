@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { hash } from 'argon2';
 import { eq, sql } from 'drizzle-orm';
@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { buildApp } from '../src/app.js';
 import { parseConfig } from '../src/config.js';
 import { parseAuthConfig } from '../src/auth/config.js';
+import { hashRefreshToken } from '../src/auth/service.js';
 import { can, recordScope, scopeFilter } from '../src/auth/rbac.js';
 import { writeAudit } from '../src/observability/audit.js';
 import { createDbClient } from '../src/db/client.js';
@@ -20,7 +21,7 @@ import { tenants } from '../src/db/schema/tenants.js';
 import { departments, employees } from '../src/db/schema/workforce.js';
 import { runMigrations, startTestDatabase } from './helpers/database.js';
 
-const authConfig = parseAuthConfig({ JWT_SECRET: randomBytes(32).toString('hex') });
+const authConfig = parseAuthConfig({ JWT_SECRET: randomBytes(32).toString('hex'), REFRESH_TOKEN_PEPPER: randomBytes(32).toString('hex') });
 const tenantA = randomUUID();
 const tenantB = randomUUID();
 const password = randomBytes(24).toString('base64url');
@@ -103,8 +104,11 @@ async function login(role = 'admin', tenantId = tenantA) {
   expect(response.statusCode, response.body).toBe(200);
   return tokenSchema.parse(response.json());
 }
+// Each call gets its own simulated client IP, like login() above, so the 5/min-per-IP refresh
+// limiter does not make unrelated test cases collide on the default inject address.
+let refreshIp = 0;
 function refresh(refreshToken: string, tenantId = tenantA) {
-  return app.inject({ method: 'POST', url: '/auth/refresh', payload: { tenantId, refreshToken } });
+  return app.inject({ method: 'POST', url: '/auth/refresh', remoteAddress: `10.0.2.${++refreshIp}`, payload: { tenantId, refreshToken } });
 }
 function headers(accessToken: string) { return { authorization: `Bearer ${accessToken}` }; }
 
@@ -117,7 +121,7 @@ describe('authentication and sessions', () => {
     expect(claims).not.toHaveProperty('permissions');
     expect(claims).not.toHaveProperty('employeeId');
     expect(claims).not.toHaveProperty('requestId');
-    const rows = await drizzle(ownerPool).select().from(refreshTokens).where(eq(refreshTokens.tokenHash, createHash('sha256').update(tokens.refreshToken).digest('hex')));
+    const rows = await drizzle(ownerPool).select().from(refreshTokens).where(eq(refreshTokens.tokenHash, hashRefreshToken(authConfig, tokens.refreshToken)));
     expect(rows).toHaveLength(1);
     expect(rows[0]?.tokenHash).not.toBe(tokens.refreshToken);
     expect(rows[0]?.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 7 * 86400000);
@@ -173,8 +177,8 @@ describe('authentication and sessions', () => {
     const second = tokenSchema.parse(secondResponse.json());
     expect(second.refreshToken).not.toBe(first.refreshToken);
     const rows = await drizzle(ownerPool).select().from(refreshTokens).where(eq(refreshTokens.userId, fixtures[0]?.id ?? ''));
-    const original = rows.find((row) => row.tokenHash === createHash('sha256').update(first.refreshToken).digest('hex'));
-    const rotated = rows.find((row) => row.tokenHash === createHash('sha256').update(second.refreshToken).digest('hex'));
+    const original = rows.find((row) => row.tokenHash === hashRefreshToken(authConfig, first.refreshToken));
+    const rotated = rows.find((row) => row.tokenHash === hashRefreshToken(authConfig, second.refreshToken));
     expect(original?.usedAt).toBeInstanceOf(Date);
     expect(rotated?.familyId).toBe(original?.familyId);
     expect(rotated?.expiresAt).toEqual(original?.expiresAt);
@@ -204,7 +208,7 @@ describe('authentication and sessions', () => {
     const tokens = await login();
     expect((await refresh(tokens.refreshToken, tenantB)).statusCode).toBe(401);
     expect((await refresh(randomBytes(32).toString('base64url'))).statusCode).toBe(401);
-    await drizzle(ownerPool).update(refreshTokens).set({ expiresAt: new Date(1) }).where(eq(refreshTokens.tokenHash, createHash('sha256').update(tokens.refreshToken).digest('hex')));
+    await drizzle(ownerPool).update(refreshTokens).set({ expiresAt: new Date(1) }).where(eq(refreshTokens.tokenHash, hashRefreshToken(authConfig, tokens.refreshToken)));
     expect((await refresh(tokens.refreshToken)).statusCode).toBe(401);
   });
 

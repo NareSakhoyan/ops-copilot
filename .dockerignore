@@ -1,0 +1,26 @@
+node_modules
+dist
+coverage
+.git
+.github
+.husky
+.qodo
+.claude
+.cache
+*.log
+*.tsbuildinfo
+
+# Secrets: never bake these into an image layer.
+.env
+.env.*
+!.env.example
+secrets/
+
+# Not needed in the image; built or run outside it.
+tests
+evals
+docs
+kb
+scripts
+MVP_SCOPE.md
+README.md

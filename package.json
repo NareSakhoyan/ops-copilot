@@ -20,7 +20,8 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed/run.ts",
     "embed:check": "tsx scripts/embed-check.ts",
-    "kb:ingest": "tsx src/rag/ingest.ts"
+    "kb:ingest": "tsx src/rag/ingest.ts",
+    "smoke": "bash scripts/smoke.sh"
   },
   "lint-staged": {
     "*.{ts,js}": "eslint --fix"
@@ -30,6 +31,8 @@
     "@ai-sdk/google-vertex": "^5.0.121",
     "@ai-sdk/openai-compatible": "^3.0.77",
     "@ai-sdk/otel": "1.0.152",
+    "@fastify/cors": "^11.3.1",
+    "@fastify/helmet": "^13.2.0",
     "@fastify/otel": "0.21.3",
     "@fastify/rate-limit": "^11.2.1",
     "@opentelemetry/api": "1.9.1",
