@@ -87,7 +87,11 @@ export function createAgentService(dependencies: Dependencies) {
             const cited: string[] = answer.match(/\[[^\]\n]+ §\d+\]/gu) ?? [];
             if (!allowed.size || !cited.length || cited.some((label) => !allowed.has(label))) answer = knowledgeAnswers.map((entry) => entry.answer).join('\n');
           }
-          if (toolCalls.some((call) => (call.name === 'sql_analytics' || call.name === 'kb_search') && call.status === 'failed')) answer = refusal;
+          // A kb_search "failure" that already produced a knowledgeAnswers entry (lines above) is a legitimate
+          // insufficient-evidence refusal with its own correct bilingual text, not a tool error to paper over.
+          const sqlFailed = toolCalls.some((call) => call.name === 'sql_analytics' && call.status === 'failed');
+          const kbFailed = toolCalls.some((call) => call.name === 'kb_search' && call.status === 'failed');
+          if (sqlFailed || (kbFailed && !knowledgeAnswers.length)) answer = refusal;
         } catch (error) {
           // Do not retain or log SDK causes: requests can contain credentials and CRM text.
           if (!drafts.length) {
