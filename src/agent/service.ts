@@ -6,15 +6,23 @@ import type { createApprovalsService } from '../approvals/service.js';
 import type { TenantDatabase } from '../db/client.js';
 import { answerFromKb } from '../rag/answer.js';
 import { createAnalyticsRunner } from '../sql-guard/execute.js';
-import { beforeModelDeadline, createChatModel, modelSettings, tracedGenerateText, MODEL_TIMEOUT_MS } from './model.js';
+import { beforeModelDeadline, createChatModel, modelSettings, tokenCount, tracedGenerateText, MODEL_TIMEOUT_MS } from './model.js';
 import { createSqlAnalyticsTool } from './sql.js';
 import { createCrmSearchTool, createTaskDraftTool, createKbSearchTool, createAuditActivityTool, type DraftPreview } from './tools.js';
 import { HttpError } from '../routes/errors.js';
 import { withAgentRunSpan, recordAgentStep } from '../observability/spans.js';
+import { getEvalWeaken } from '../testing/weaken.js';
 
-export const chatInputSchema = z.object({ message: z.string().trim().min(1).max(8000), allowTaskDraft: z.boolean().default(false) }).strict();
+const chatInputBase = z.object({ message: z.string().trim().min(1).max(8000), allowTaskDraft: z.boolean().default(false) });
+// EVAL_WEAKEN=tenant_arg (non-production only) adds an optional tenantId the caller can supply
+// directly, simulating a regression where the server trusts a client-asserted tenant selector
+// instead of the authenticated session alone. Off by default, this field does not exist and an
+// extra tenantId in the body is rejected with 400 (see tests/agent.test.ts).
+const chatInputExtended = chatInputBase.extend({ tenantId: z.uuid().optional() });
+export const chatInputSchema = (getEvalWeaken() === 'tenant_arg' ? chatInputExtended : chatInputBase).strict();
+type ChatInput = z.infer<typeof chatInputExtended>;
 const toolNames = z.enum(['crm_search', 'sql_analytics', 'task_draft', 'kb_search', 'audit_activity']);
-interface ToolSummary { toolCallId: string; name: string; status: 'succeeded' | 'failed'; sql?: string; rowCount?: number }
+interface ToolSummary { toolCallId: string; name: string; status: 'succeeded' | 'failed'; sql?: string; rowCount?: number; output?: string }
 interface Dependencies {
   database: TenantDatabase;
   proposals: Pick<ReturnType<typeof createApprovalsService>, 'createProposal'>;
@@ -33,7 +41,11 @@ If task_draft is unavailable, explain that the caller must explicitly enable dra
 export function createAgentService(dependencies: Dependencies) {
   return {
     async chat(context: RequestContext, input: unknown) {
-      const request = chatInputSchema.parse(input);
+      const request = chatInputSchema.parse(input) as ChatInput;
+      // EVAL_WEAKEN=tenant_arg (non-production only): trust the caller-supplied tenantId over the
+      // authenticated session's own. freshContext() is what would normally re-verify the user
+      // belongs to this tenant; it is the single place that bypass is implemented (see policy.ts).
+      const effectiveTenantId = getEvalWeaken() === 'tenant_arg' && request.tenantId ? request.tenantId : context.tenantId;
       return withAgentRunSpan(async () => {
         const drafts: DraftPreview[] = [];
         const settings = modelSettings();
@@ -41,9 +53,11 @@ export function createAgentService(dependencies: Dependencies) {
         const knowledgeAnswers: { answer: string; citations: { title: string; ordinal: number }[] }[] = [];
         let stepIndex = 0;
         let answer: string;
+        let usage = { promptTokens: 0, completionTokens: 0 };
         try {
           const result = await beforeModelDeadline(settings.abortSignal, async () => {
-            const ctx = await dependencies.database.withTenant({ tenant_id: context.tenantId, user_id: context.userId }, (tx) => freshContext(tx, context));
+            const ctx = await dependencies.database.withTenant({ tenant_id: effectiveTenantId, user_id: context.userId },
+              (tx) => freshContext(tx, { ...context, tenantId: effectiveTenantId }));
             settings.abortSignal.throwIfAborted();
             const tools = {
               crm_search: createCrmSearchTool(ctx, dependencies.database),
@@ -74,11 +88,16 @@ export function createAgentService(dependencies: Dependencies) {
                   toolCalls.push({ toolCallId: call.toolCallId, name: name.success ? name.data : 'unknown', status: failed ? 'failed' : 'succeeded',
                     ...(parsed.success && parsed.data.sql ? { sql: parsed.data.sql } : {}),
                     ...(parsed.success && parsed.data.rows ? { rowCount: parsed.data.rows.length } : {}),
+                    // Truncated and best-effort: eval/debug visibility only, never relied on for control flow.
+                    ...(output === undefined ? {} : { output: JSON.stringify(output).slice(0, 500) }),
                   });
                 }
               },
             }));
           });
+          // Covers only this top-level planning call; sub-calls inside kb_search/sql_analytics
+          // (their own model generations) are not aggregated into this figure.
+          usage = { promptTokens: tokenCount(result.usage.inputTokens), completionTokens: tokenCount(result.usage.outputTokens) };
           answer = result.text.trim() || (result.steps.length >= 6
             ? 'The tool-step limit was reached. Narrow the request. / Գործիքների քայլերի սահմանաչափը լրացավ։ Հստակեցրեք հարցումը։' : refusal);
           // Refusals cannot be turned into fabricated SQL answers by the outer model.
@@ -109,7 +128,7 @@ export function createAgentService(dependencies: Dependencies) {
           // A deterministic preview prevents the model from claiming a draft was executed.
           answer = `${label}\n${drafts.map((draft) => JSON.stringify(draft)).join('\n')}`;
         }
-        return { answer, toolCalls, pendingActionIds: drafts.map((draft) => draft.pendingActionId) };
+        return { answer, toolCalls, pendingActionIds: drafts.map((draft) => draft.pendingActionId), usage };
       });
     },
   };

@@ -57,7 +57,7 @@ export async function beforeModelDeadline<T>(signal: AbortSignal, run: () => Pro
 
 export type TelemetrySetting = { isEnabled: true; functionId: string; recordInputs: false; recordOutputs: false };
 // Some provider adapters report {total} detail objects instead of a bare number; this reads either.
-function tokenCount(value: number | { total: number } | undefined): number {
+export function tokenCount(value: number | { total: number } | undefined): number {
   if (typeof value === 'number') return value;
   return value?.total ?? 0;
 }

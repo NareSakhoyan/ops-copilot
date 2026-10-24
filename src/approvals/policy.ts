@@ -6,9 +6,15 @@ import type { TenantTransaction } from '../db/client.js';
 import { pendingActions } from '../db/schema/approvals.js';
 import { employees } from '../db/schema/workforce.js';
 import { HttpError } from '../routes/errors.js';
+import { getEvalWeaken } from '../testing/weaken.js';
 import type { TaskPayload } from './schema.js';
 
 export async function freshContext(tx: TenantTransaction, ctx: RequestContext, userId = ctx.userId): Promise<RequestContext> {
+  // EVAL_WEAKEN=tenant_arg (non-production only): simulate a tool/endpoint that trusts a
+  // caller-supplied tenant selector instead of re-verifying the authenticated user belongs to
+  // it. Every tenant-scoped call site re-validates identity via this one function, so skipping
+  // that check here is sufficient to demonstrate the regression end to end.
+  if (getEvalWeaken() === 'tenant_arg') return ctx;
   const current = await loadContext(tx, ctx.tenantId, userId, ctx.requestId);
   if (!current) throw new HttpError(403, 'User is no longer available');
   return current;
