@@ -2,8 +2,12 @@ import { createGoogle } from '@ai-sdk/google';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createGateway, type LanguageModel } from 'ai';
+import { SpanStatusCode } from '@opentelemetry/api';
 import { z } from 'zod';
 import { loadEnvironment } from '../config.js';
+import { tracer } from '../observability/tracing.js';
+import { computeCostUsd } from '../observability/cost.js';
+import { llmTokenCounter } from '../observability/metrics.js';
 
 /** The single provider boundary for agent, SQL generation, and KB answering. */
 export function createChatModel(environment = loadEnvironment()): LanguageModel {
@@ -49,4 +53,37 @@ export async function beforeModelDeadline<T>(signal: AbortSignal, run: () => Pro
   });
   try { return await Promise.race([run(), aborted]); }
   finally { signal.removeEventListener('abort', onAbort); }
+}
+
+export type TelemetrySetting = { isEnabled: true; functionId: string; recordInputs: false; recordOutputs: false };
+// Some provider adapters report {total} detail objects instead of a bare number; this reads either.
+function tokenCount(value: number | { total: number } | undefined): number {
+  if (typeof value === 'number') return value;
+  return value?.total ?? 0;
+}
+
+/** Wraps a generateText call (agent planning, SQL generation, KB answering) in an llm.call span with model, token, latency, and cost attributes, and records token metrics. Takes a callback rather than generateText's own params so this stays independent of its TOOLS/OUTPUT generics; pass experimental_telemetry through to enable the AI SDK's own telemetry without recording raw prompt/completion content, which may contain CRM data. */
+export async function tracedGenerateText<T extends { usage: { inputTokens: number | { total: number } | undefined; outputTokens: number | { total: number } | undefined } }>(
+  functionId: string, modelId: string, run: (telemetry: TelemetrySetting) => Promise<T>,
+): Promise<T> {
+  return tracer.startActiveSpan('llm.call', { attributes: { 'llm.model': modelId, 'llm.function_id': functionId } }, async (span) => {
+    const started = performance.now();
+    try {
+      const result = await run({ isEnabled: true, functionId, recordInputs: false, recordOutputs: false });
+      const promptTokens = tokenCount(result.usage.inputTokens);
+      const completionTokens = tokenCount(result.usage.outputTokens);
+      const costUsd = computeCostUsd(modelId, promptTokens, completionTokens);
+      span.setAttributes({
+        'llm.prompt_tokens': promptTokens, 'llm.completion_tokens': completionTokens,
+        'llm.latency_ms': performance.now() - started, 'llm.cost_usd': costUsd,
+      });
+      llmTokenCounter.add(promptTokens, { model: modelId, type: 'prompt' });
+      llmTokenCounter.add(completionTokens, { model: modelId, type: 'completion' });
+      return result;
+    } catch (error) {
+      span.recordException(error as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR });
+      throw error;
+    } finally { span.end(); }
+  });
 }

@@ -7,7 +7,7 @@ import { database, type TenantDatabase } from '../db/client.js';
 import { parseAnswerConfig } from './config.js';
 import { createGoogleEmbedder, type Embedder } from './embed.js';
 import { createKbSearch } from './search.js';
-import { beforeModelDeadline, createChatModel, modelSettings } from '../agent/model.js';
+import { beforeModelDeadline, createChatModel, modelSettings, tracedGenerateText } from '../agent/model.js';
 
 export const KB_REFUSAL = 'I do not have enough authorized knowledge base information to answer. / Գիտելիքների բազայում բավարար հասանելի տեղեկություն չկա։';
 interface ModelInput { instructions: string; prompt: string }
@@ -17,7 +17,10 @@ interface AnswerOptions { database: TenantDatabase; embedder: Embedder; llm?: Kn
 async function modelAnswer(input: ModelInput, signal?: AbortSignal): Promise<string> {
   try {
     const settings = modelSettings(signal);
-    const result = await beforeModelDeadline(settings.abortSignal, () => generateText({ ...settings, model: createChatModel(), ...input, maxOutputTokens: 1000 }));
+    const model = createChatModel();
+    const modelId = typeof model === 'string' ? model : model.modelId;
+    const result = await beforeModelDeadline(settings.abortSignal, () => tracedGenerateText('kb.answer', modelId, (telemetry) =>
+      generateText({ ...settings, model, ...input, maxOutputTokens: 1000, experimental_telemetry: telemetry })));
     return result.text;
   } catch { throw new Error('Knowledge answer provider failed.'); }
 }

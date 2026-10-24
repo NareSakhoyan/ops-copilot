@@ -49,6 +49,10 @@ Requires `audit_logs:read` and whole-tenant row scope (admin for the defined rol
 
 Each record contains `id`, `tenantId`, `actorUserId`, `action`, `entityType`, `entityId`, `requestId`, `details` (event metadata), `createdAt`, and `updatedAt`. Historical/system records may have null actor/entity/request IDs. Authentication events are `auth.login`, `auth.refresh`, `auth.refresh_reuse`, and `auth.logout`. No raw credentials or tokens are included in those events.
 
+## Metrics
+
+`GET /metrics` returns Prometheus-format text (no authentication, like `/health`): `http_server_request_count` and `http_server_request_duration_ms` labeled by route/method/status, `tool_error_count` labeled by tool name, and `llm_tokens_total` labeled by model and token type (prompt/completion). See [README.md](../README.md#observability) for the trace spans this app also emits over OTLP.
+
 ## Task proposal service
 
 The agent/tool calls `createApprovalsService(database, mock).createProposal(request.context, input)` from authenticated server code. There is no separate proposal-creation HTTP endpoint. The strict input is:

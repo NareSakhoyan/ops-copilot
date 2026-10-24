@@ -9,6 +9,7 @@ import { sqlExecutionLog } from '../db/schema/analytics-log.js';
 import type { AnalyticsViewName } from '../db/schema/analytics.js';
 import { HttpError } from '../routes/errors.js';
 import { validateSql } from './validate.js';
+import { recordSqlGuardVerdict } from '../observability/spans.js';
 
 const rowPermissions: Record<AnalyticsViewName, string> = {
   v_deals: 'deals:read', v_tasks: 'tasks:read',
@@ -82,11 +83,13 @@ export function createAnalyticsRunner(db: TenantDatabase) {
           verdict = 'error';
         }
       }
+      const durationMs = Math.ceil(performance.now() - started);
       await tx.insert(sqlExecutionLog).values({
         tenantId: identity.tenantId, userId: identity.userId, requestId: identity.requestId,
         question: checkedQuestion, sql: typeof input === 'string' ? input.slice(0, 20000) : '[invalid input]',
-        verdict, rows: rows.length, durationMs: Math.ceil(performance.now() - started), error: failure?.message ?? null,
+        verdict, rows: rows.length, durationMs, error: failure?.message ?? null,
       });
+      recordSqlGuardVerdict({ verdict, rows: rows.length, durationMs });
       return { rows, error: failure };
     });
     // Throw only after the rejected/error execution record has committed.

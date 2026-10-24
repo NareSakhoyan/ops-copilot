@@ -1,8 +1,10 @@
 import { pino } from 'pino';
 import { loadConfig } from './config.js';
+import { startTracing } from './observability/tracing.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  startTracing();
   // Catch environment-dependent schema initialization in the normal startup error path.
   const { buildApp } = await import('./app.js');
   const app = buildApp(config);

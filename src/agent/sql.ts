@@ -6,8 +6,9 @@ import type { RequestContext } from '../auth/context.js';
 import { analyticsViews } from '../db/schema/analytics.js';
 import { HttpError } from '../routes/errors.js';
 import { runAnalyticsQuery } from '../sql-guard/execute.js';
-import { beforeModelDeadline, createChatModel, modelSettings } from './model.js';
+import { beforeModelDeadline, createChatModel, modelSettings, tracedGenerateText } from './model.js';
 import { toolModelOutput } from './output.js';
+import { withToolSpan } from '../observability/spans.js';
 
 const inputSchema = z.object({ question: z.string().trim().min(1).max(4000) }).strict();
 const allowedSchema = Object.entries(analyticsViews).map(([name, view]) => ({
@@ -32,7 +33,7 @@ export function createSqlAnalyticsTool(ctx: RequestContext, dependencies: {
     description: 'Answer an analytics question using only approved read-only views. Returns rows and the SQL used. One correction after a rejected query; then refusal.',
     inputSchema,
     toModelOutput: toolModelOutput,
-    async execute(input, { abortSignal }) {
+    execute: (input, { abortSignal }) => withToolSpan('sql_analytics', input, async () => {
       const { question } = inputSchema.parse(input);
       const earlier = previous;
       let release = () => {};
@@ -43,14 +44,16 @@ export function createSqlAnalyticsTool(ctx: RequestContext, dependencies: {
         const settings = modelSettings(abortSignal);
         settings.abortSignal.throwIfAborted();
         if (exhausted) return refusal;
+        const model = (dependencies.model ?? createChatModel)();
+        const modelId = typeof model === 'string' ? model : model.modelId;
         let rejected = false;
         for (let attempt = 0; attempt < 2; attempt++) {
           let query: string;
           try {
-            const generated = await beforeModelDeadline(settings.abortSignal, () => generateText({
-              ...settings, model: (dependencies.model ?? createChatModel)(), instructions,
+            const generated = await beforeModelDeadline(settings.abortSignal, () => tracedGenerateText('sql.generate', modelId, (telemetry) => generateText({
+              ...settings, model, instructions, experimental_telemetry: telemetry,
               prompt: `Question: ${JSON.stringify(question)}\nUser may receive row-level data: ${!ctx.roles.every((role) => role === 'viewer')}\n${rejected ? 'The previous query was rejected. Generate one corrected query that follows the allowed schema and safety rules. No further correction is permitted.' : ''}`,
-            }));
+            })));
             query = z.string().trim().min(1).max(20000).parse(generated.text);
           } catch { exhausted = true; return refusal; }
           try {
@@ -66,6 +69,6 @@ export function createSqlAnalyticsTool(ctx: RequestContext, dependencies: {
         exhausted = true;
         return refusal;
       } finally { release(); }
-    },
+    }),
   });
 }

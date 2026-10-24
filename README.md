@@ -147,6 +147,26 @@ The response contains `answer`, `toolCalls`, and `pendingActionIds`. SQL summari
 
 Chat is read-only by default. A task proposal requires `allowTaskDraft: true`, an explicit drafting request, and sufficient task details. Only a pending action is inserted, with a deterministic preview indicating approval is required; the agent cannot approve or execute it. Approve or reject the returned UUID through the existing `/approvals/:id/approve` or `/reject` routes. Tool-step limits and 429 retries never approve a proposal. See [docs/api.md](docs/api.md#chat) for payloads and safety boundaries.
 
+## Observability
+
+Start Jaeger alongside PostgreSQL and open its UI once the app has handled a request:
+
+```sh
+docker compose up -d --wait db jaeger
+npm run dev
+```
+
+```dotenv
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+OTEL_SERVICE_NAME=ops-copilot
+```
+
+Open `http://127.0.0.1:16686` for the Jaeger UI. Every request produces a trace with nested spans: the HTTP request (`request_id` attribute, via `@fastify/otel`), the agent run, each agent step, each tool call (name, redacted input, status, duration), each LLM call (model, prompt/completion tokens, latency, `cost_usd`), and each SQL guard verdict. The AI SDK's own telemetry (`experimental_telemetry`) is enabled on every model call and nests under that call's `llm.call` span, with prompt/completion content excluded since it may contain CRM data. Agent/tool errors are recorded as span exceptions with `ERROR` status.
+
+`cost_usd` is `0` by default; configure real per-model prices with `LLM_PRICE_TABLE_JSON` (see `.env.example`). Emails, phone numbers, token-shaped strings, and known-sensitive field names (password, token, authorization, apiKey, cookie) are redacted from span attributes and from structured logs before they're recorded.
+
+`GET /metrics` returns Prometheus-format text: `http_server_request_count` and `http_server_request_duration_ms` (by route/method/status), `tool_error_count` (by tool name), and `llm_tokens_total` (by model and prompt/completion). No authentication is required, matching `/health`.
+
 ## Verification and production build
 
 ```sh

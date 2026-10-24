@@ -17,6 +17,9 @@ import { registerMockBitrix } from './mock-bitrix/routes.js';
 import type { LanguageModel } from 'ai';
 import { createAgentService } from './agent/service.js';
 import { registerChat } from './agent/routes.js';
+import { fastifyOtelInstrumentation, shutdownTracing } from './observability/tracing.js';
+import { registerMetricsRoute, httpRequestCounter, httpRequestDuration } from './observability/metrics.js';
+import { redactValue } from './observability/redact.js';
 
 export function buildApp(
   config: AppConfig,
@@ -26,6 +29,8 @@ export function buildApp(
   const logger: FastifyBaseLogger = pino({
     level: config.LOG_LEVEL,
     redact: ['req.headers.authorization', 'req.headers.cookie', 'password', 'refreshToken', 'accessToken'],
+    // Path-based redact above only catches known fields; this backstops free-text emails/phones/tokens in any logged payload.
+    formatters: { log: (object) => redactValue(object) as Record<string, unknown> },
   }, logStream);
   const app = Fastify({
     loggerInstance: logger,
@@ -33,12 +38,22 @@ export function buildApp(
     genReqId: () => randomUUID(),
   });
 
+  // Registered before any routes so @fastify/otel can wrap every subsequent route definition.
+  app.register(fastifyOtelInstrumentation.plugin());
+
   app.addHook('onRequest', (request, reply, done) => {
     reply.header('X-Request-ID', request.id);
     done();
   });
+  app.addHook('onResponse', (request, reply, done) => {
+    const route = request.routeOptions.url ?? request.url;
+    httpRequestCounter.add(1, { route, method: request.method, status: reply.statusCode });
+    httpRequestDuration.record(reply.elapsedTime, { route });
+    done();
+  });
 
   app.get('/health', () => ({ status: 'ok' as const }));
+  registerMetricsRoute(app);
   const db = options.database ?? database;
   registerAuth(app, db, options.authConfig ?? loadAuthConfig());
   const mock = options.mockBitrix ?? createMockBitrix(db);
@@ -48,6 +63,7 @@ export function buildApp(
   registerChat(app, createAgentService({ database: db, proposals, ...(options.agentModel ? { model: options.agentModel } : {}) }));
 
   app.addHook('onClose', closeDatabase);
+  app.addHook('onClose', shutdownTracing);
 
   return app;
 }

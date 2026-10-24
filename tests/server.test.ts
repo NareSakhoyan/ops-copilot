@@ -28,6 +28,8 @@ describe('server startup', () => {
       writeFileSync(join(directory, '.env'), content);
     }
 
+    // Loading the OpenTelemetry/Fastify-instrumentation module graph before config validation
+    // completes takes longer under full-suite parallel load than the previous 5s default.
     const result = spawnSync(process.execPath, ['--import', import.meta.resolve('tsx'), serverPath], {
       cwd: directory,
       env: {},
@@ -42,5 +44,5 @@ describe('server startup', () => {
       .passthrough().parse(output);
     expect(log.msg).toBe('Application failed to initialize');
     expect(result.stdout).toContain(reason);
-  });
+  }, 15000);
 });
