@@ -11,6 +11,7 @@ import { createSqlAnalyticsTool } from './sql.js';
 import { createCrmSearchTool, createTaskDraftTool, createKbSearchTool, createAuditActivityTool, type DraftPreview } from './tools.js';
 import { HttpError } from '../routes/errors.js';
 import { withAgentRunSpan, recordAgentStep } from '../observability/spans.js';
+import { redactValue } from '../observability/redact.js';
 import { getEvalWeaken } from '../testing/weaken.js';
 
 const chatInputBase = z.object({ message: z.string().trim().min(1).max(8000), allowTaskDraft: z.boolean().default(false) });
@@ -88,8 +89,10 @@ export function createAgentService(dependencies: Dependencies) {
                   toolCalls.push({ toolCallId: call.toolCallId, name: name.success ? name.data : 'unknown', status: failed ? 'failed' : 'succeeded',
                     ...(parsed.success && parsed.data.sql ? { sql: parsed.data.sql } : {}),
                     ...(parsed.success && parsed.data.rows ? { rowCount: parsed.data.rows.length } : {}),
-                    // Truncated and best-effort: eval/debug visibility only, never relied on for control flow.
-                    ...(output === undefined ? {} : { output: JSON.stringify(output).slice(0, 500) }),
+                    // Truncated and best-effort: debug visibility into tool results, never relied on for
+                    // control flow. Redacted with the same utility as logs/span attributes (redact.ts) so
+                    // CRM emails/phones/tokens never reach this field even in a debugging context.
+                    ...(output === undefined ? {} : { output: JSON.stringify(redactValue(output)).slice(0, 500) }),
                   });
                 }
               },

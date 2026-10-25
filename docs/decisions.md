@@ -336,3 +336,9 @@ Added `@fastify/swagger`/`@fastify/swagger-ui` in **`mode: 'static'`**, with a h
 The same review found no architecture/ER diagram and no AI-tool-usage disclosure, both required deliverables — the exact tool/role breakdown for the latter came from the user directly, not inferred from commit metadata.
 
 Added `docs/architecture.md` (system flowchart, chat-request sequence diagram, approval-state diagram, core-CRM `erDiagram`, all Mermaid) and `docs/ai-tools.md` (OpenAI Codex for the initial implementation phase through the RAG work, Anthropic Claude Code from there onward, ChatGPT/GPT for planning/research only). Both are documentation-only, no code/behavior impact.
+
+## Redacted `/chat` debug output field
+
+An agent-architecture audit found `toolCalls[].output` (`src/agent/service.ts`) — a truncated preview of each tool's raw result, kept for debugging — bypassed `redactValue`, the same utility already used for logs (`app.ts`) and span attributes (`spans.ts`), and was undocumented in `src/docs/openapi.ts`'s `/chat` response schema alongside `sql`/`rowCount`.
+
+Kept the field (needed for debugging) but passed it through `redactValue` before truncating, so CRM emails/phones/tokens can't reach it, and documented `sql`/`rowCount`/`output` on the OpenAPI schema. No environment gate added: unlike `LLM_PROVIDER=mock` or `EVAL_WEAKEN`, this field is meant to be available everywhere it's needed, so redaction is the control instead of a production block.

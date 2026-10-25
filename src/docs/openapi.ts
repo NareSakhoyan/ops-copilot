@@ -187,7 +187,12 @@ export const openApiDocument: OpenAPIV3.Document = {
           '200': {
             description: 'OK', content: { 'application/json': { schema: { type: 'object', properties: {
               answer: { type: 'string' },
-              toolCalls: { type: 'array', items: { type: 'object', properties: { toolCallId: { type: 'string' }, name: { type: 'string' }, status: { type: 'string', enum: ['succeeded', 'failed'] } } } },
+              toolCalls: { type: 'array', items: { type: 'object', properties: {
+                toolCallId: { type: 'string' }, name: { type: 'string' }, status: { type: 'string', enum: ['succeeded', 'failed'] },
+                sql: { type: 'string', description: 'SQL executed by sql_analytics, when applicable.' },
+                rowCount: { type: 'integer', description: 'Row count returned by the tool, when applicable.' },
+                output: { type: 'string', description: 'Truncated (max 500 chars), redacted preview of the raw tool result, for debugging. Best-effort only; never relied on for control flow.' },
+              } } },
               pendingActionIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
             }, required: ['answer', 'toolCalls', 'pendingActionIds'] } } },
           },
