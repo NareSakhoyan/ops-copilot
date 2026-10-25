@@ -84,6 +84,23 @@ describe('GET /health/ready', () => {
   });
 });
 
+describe('GET /docs', () => {
+  it('serves the Swagger UI page unauthenticated', async () => {
+    const response = await createApp().inject({ method: 'GET', url: '/docs' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+  });
+
+  it('serves the static OpenAPI document and documents every implemented route', async () => {
+    const response = await createApp().inject({ method: 'GET', url: '/docs/json' });
+    expect(response.statusCode).toBe(200);
+    const document = z.object({ openapi: z.string(), paths: z.record(z.string(), z.unknown()) }).parse(response.json());
+    expect(Object.keys(document.paths)).toEqual(expect.arrayContaining([
+      '/health', '/auth/login', '/chat', '/approvals', '/approvals/{id}/approve', '/rest/tasks.task.add', '/audit-logs',
+    ]));
+  });
+});
+
 describe('rate limiting', () => {
   it('returns 429 with a Retry-After header once the global limit is exceeded', async () => {
     const app = buildApp(

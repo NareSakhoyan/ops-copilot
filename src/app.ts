@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
+import fastifySwagger from '@fastify/swagger';
+import fastifySwaggerUi from '@fastify/swagger-ui';
 import Fastify from 'fastify';
 import type { FastifyBaseLogger } from 'fastify';
 import { pino } from 'pino';
@@ -27,6 +29,7 @@ import type { HealthDeps } from './health.js';
 import { fastifyOtelInstrumentation, shutdownTracing } from './observability/tracing.js';
 import { registerMetricsRoute, httpRequestCounter, httpRequestDuration } from './observability/metrics.js';
 import { redactValue } from './observability/redact.js';
+import { openApiDocument } from './docs/openapi.js';
 
 export function buildApp(
   config: AppConfig,
@@ -90,6 +93,11 @@ export function buildApp(
   app.get('/health', () => ({ status: 'ok' as const }));
   registerHealth(app, options.healthDeps);
   registerMetricsRoute(app);
+  // Static OpenAPI document (src/docs/openapi.ts) — no per-route `schema` options are added
+  // anywhere else, so this cannot double-validate requests against the existing inline Zod
+  // checks. Unauthenticated, matching /health and /metrics: it is API documentation, not data.
+  app.register(fastifySwagger, { mode: 'static', specification: { document: openApiDocument } });
+  app.register(fastifySwaggerUi, { routePrefix: '/docs' });
   const db = options.database ?? database;
   const authConfig = options.authConfig ?? loadAuthConfig();
   registerAuth(app, db, authConfig);

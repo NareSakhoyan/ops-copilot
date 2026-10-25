@@ -147,6 +147,10 @@ The response contains `answer`, `toolCalls`, and `pendingActionIds`. SQL summari
 
 Chat is read-only by default. A task proposal requires `allowTaskDraft: true`, an explicit drafting request, and sufficient task details. Only a pending action is inserted, with a deterministic preview indicating approval is required; the agent cannot approve or execute it. Approve or reject the returned UUID through the existing `/approvals/:id/approve` or `/reject` routes. Tool-step limits and 429 retries never approve a proposal. See [docs/api.md](docs/api.md#chat) for payloads and safety boundaries.
 
+## API documentation
+
+`GET /docs` serves an interactive Swagger UI; `GET /docs/json` serves the same contract as a raw OpenAPI 3.0 document. Both are unauthenticated, matching `/health` and `/metrics`. The document ([src/docs/openapi.ts](src/docs/openapi.ts)) is hand-written and static — it documents the already-implemented request/response contract without adding Fastify route-level schemas, so it cannot double-validate requests against the existing inline Zod checks in each route file. See [docs/api.md](docs/api.md) for the same contract in prose with runnable `curl` examples.
+
 ## MCP server
 
 `POST /mcp` exposes the same five agent tools (`crm_search`, `sql_analytics`, `kb_search`, `audit_activity`, `task_draft`) to external MCP clients over Streamable HTTP, reusing the chat agent's tool factories, RBAC, SQL guard, and KB ACL filtering — one source of truth, no duplicated logic. Authenticate the same way as REST: `POST /auth/login`, then `Authorization: Bearer <accessToken>` on every `/mcp` request. `task_draft` only creates a `pending_action`; there is no approve or execute tool in MCP. Try it with `npm run mcp:demo` or `npx @modelcontextprotocol/inspector`. See [docs/mcp.md](docs/mcp.md) for the transport, auth model, governance details, and what is intentionally not implemented (full OAuth, resources/prompts, multi-tenant client registration).
