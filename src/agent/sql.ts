@@ -30,7 +30,7 @@ export function createSqlAnalyticsTool(ctx: RequestContext, dependencies: {
   // Serialize calls so parallel model tool calls cannot race the refusal boundary.
   let previous = Promise.resolve();
   return tool({
-    description: 'Answer an analytics question using only approved read-only views. Returns rows and the SQL used. One correction after a rejected query; then refusal.',
+    description: 'Answer an analytics question — counts, totals, averages, or any "how many"/aggregate question — using only approved read-only views. Prefer this over crm_search whenever only a number is needed, not the underlying rows: crm_search returns a capped page of matching rows, never a reliable count. Returns rows and the SQL used. One correction after a rejected query; then refusal.',
     inputSchema,
     toModelOutput: toolModelOutput,
     execute: (input, { abortSignal }) => withToolSpan('sql_analytics', input, async () => {

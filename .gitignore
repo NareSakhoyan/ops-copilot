@@ -5,6 +5,9 @@ coverage/
 .env
 .env.*
 !.env.example
+mcp.json
+mcp.json.*
+!mcp.json.example
 *.tsbuildinfo
 *.log
 .husky/_/

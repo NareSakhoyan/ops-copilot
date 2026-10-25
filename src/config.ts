@@ -25,9 +25,15 @@ const configSchema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   RATE_LIMIT_CHAT_MAX: z.coerce.number().int().positive().default(30),
+  RATE_LIMIT_MCP_MAX: z.coerce.number().int().positive().default(30),
   // Never honored when NODE_ENV=production (see src/app.ts); lets evals/CI reuse a cached token
   // without inheriting the per-user /chat limit across many sequential cases.
   RATE_LIMIT_TEST_BYPASS: z.coerce.boolean().default(false),
+  // Comma-separated allowlist for the MCP endpoint's Origin header (DNS-rebinding protection).
+  // Empty/unset means no Origin-bearing (browser-style) client may call /mcp; non-browser
+  // clients that send no Origin header at all are unaffected, matching the MCP spec's "origin
+  // validation targets browser-based DNS rebinding" scope.
+  MCP_ALLOWED_ORIGINS: z.string().trim().optional(),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;

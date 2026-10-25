@@ -4,7 +4,7 @@ import { redactValue } from './redact.js';
 import { toolErrorCounter } from './metrics.js';
 
 // Matches the tool output contract used across src/agent/tools.ts and sql.ts.
-function isToolFailure(result: unknown): boolean {
+export function isToolFailure(result: unknown): boolean {
   if (typeof result !== 'object' || result === null) return false;
   const shape = result as { error?: unknown; refused?: unknown };
   return Boolean(shape.error) || shape.refused === true;
@@ -42,6 +42,15 @@ export async function withAgentRunSpan<T>(fn: (span: Span) => Promise<T>): Promi
 /** Point-in-time span for one agent step; start/end are approximated as instantaneous since onStepEnd fires after the step already completed. */
 export function recordAgentStep(attributes: Record<string, string | number | boolean>): void {
   tracer.startSpan('agent.step', { attributes }).end();
+}
+
+/** Wraps one MCP tools/call request so its nested tool.call span carries the invoking channel's tool name and request ID. */
+export async function withMcpCallSpan<T>(toolName: string, requestId: string, fn: () => Promise<T>): Promise<T> {
+  return tracer.startActiveSpan('mcp.tool_call', { attributes: { 'mcp.tool': toolName, 'request_id': requestId } }, async (span) => {
+    try { return await fn(); }
+    catch (error) { span.recordException(error as Error); span.setStatus({ code: SpanStatusCode.ERROR }); throw error; }
+    finally { span.end(); }
+  });
 }
 
 export function recordSqlGuardVerdict(attributes: { verdict: 'accepted' | 'rejected' | 'error'; rows: number; durationMs: number }): void {

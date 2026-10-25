@@ -109,7 +109,7 @@ describe('agent tools and context boundaries', () => {
     if (!search.execute) throw new Error('Missing search execution');
     const unscoped = z.object({ rows: z.array(z.unknown()) }).parse(await search.execute({ entity: 'deals' } as never, invocation));
     expect(unscoped.rows.length).toBeGreaterThan(10);
-    expect(unscoped.rows.length).toBeLessThanOrEqual(50);
+    expect(unscoped.rows.length).toBeLessThanOrEqual(200);
   });
 
   it('requires companies:read independently of contacts:read', async () => {

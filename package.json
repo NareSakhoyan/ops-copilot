@@ -20,6 +20,8 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed/run.ts",
     "embed:check": "tsx scripts/embed-check.ts",
+    "mcp:demo": "tsx scripts/mcp-demo.ts",
+    "mcp:stdio": "tsx scripts/mcp-stdio.ts",
     "kb:ingest": "tsx src/rag/ingest.ts",
     "smoke": "bash scripts/smoke.sh"
   },
@@ -35,6 +37,7 @@
     "@fastify/helmet": "^13.2.0",
     "@fastify/otel": "0.21.3",
     "@fastify/rate-limit": "^11.2.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/exporter-prometheus": "0.223.0",
     "@opentelemetry/exporter-trace-otlp-http": "0.223.0",

@@ -22,17 +22,27 @@ const paginationSchema = z.object({
   offset: z.coerce.number().int().min(0).max(100000).default(0),
 }).strict();
 
+// Shared by the REST preHandler decorator below and the MCP route's own preHandler (src/mcp/routes.ts),
+// which additionally sets a WWW-Authenticate header on failure. Returns null for any failure (missing,
+// malformed, invalid, or expired Bearer token, or a user that no longer exists) without distinguishing
+// which, so neither caller can leak which check failed.
+export async function authenticateContext(
+  database: TenantDatabase, config: AuthConfig, request: { headers: { authorization?: string | undefined }; id: string },
+): Promise<RequestContext | null> {
+  const authorization = z.string().max(8192).regex(/^Bearer \S+$/).safeParse(request.headers.authorization);
+  if (!authorization.success) return null;
+  let claims;
+  try { claims = await verifyAccessToken(config, authorization.data.slice(7)); }
+  catch { return null; }
+  return database.withTenant({ tenant_id: claims.tenantId, user_id: claims.userId }, (tx) =>
+    loadContext(tx, claims.tenantId, claims.userId, request.id));
+}
+
 export function registerAuth(app: FastifyInstance, database: TenantDatabase, config: AuthConfig): void {
   const auth = createAuthService(database, config);
   app.decorateRequest('context');
   app.decorate('authenticate', async (request, reply) => {
-    const authorization = z.string().max(8192).regex(/^Bearer \S+$/).safeParse(request.headers.authorization);
-    if (!authorization.success) return reply.code(401).send({ error: 'Unauthorized' });
-    let claims;
-    try { claims = await verifyAccessToken(config, authorization.data.slice(7)); }
-    catch { return reply.code(401).send({ error: 'Unauthorized' }); }
-    const ctx = await database.withTenant({ tenant_id: claims.tenantId, user_id: claims.userId }, (tx) =>
-      loadContext(tx, claims.tenantId, claims.userId, request.id));
+    const ctx = await authenticateContext(database, config, request);
     if (!ctx) return reply.code(401).send({ error: 'Unauthorized' });
     request.context = ctx;
   });

@@ -20,6 +20,8 @@ import { registerMockBitrix } from './mock-bitrix/routes.js';
 import type { LanguageModel } from 'ai';
 import { createAgentService } from './agent/service.js';
 import { registerChat } from './agent/routes.js';
+import { registerMcp } from './mcp/routes.js';
+import type { answerFromKb } from './rag/answer.js';
 import { registerHealth } from './health.js';
 import type { HealthDeps } from './health.js';
 import { fastifyOtelInstrumentation, shutdownTracing } from './observability/tracing.js';
@@ -31,7 +33,7 @@ export function buildApp(
   logStream?: DestinationStream,
   options: {
     authConfig?: AuthConfig; database?: TenantDatabase; mockBitrix?: MockBitrix;
-    agentModel?: () => LanguageModel; healthDeps?: HealthDeps;
+    agentModel?: () => LanguageModel; agentKbAnswer?: typeof answerFromKb; healthDeps?: HealthDeps;
   } = {},
 ) {
   const logger: FastifyBaseLogger = pino({
@@ -89,14 +91,20 @@ export function buildApp(
   registerHealth(app, options.healthDeps);
   registerMetricsRoute(app);
   const db = options.database ?? database;
-  registerAuth(app, db, options.authConfig ?? loadAuthConfig());
+  const authConfig = options.authConfig ?? loadAuthConfig();
+  registerAuth(app, db, authConfig);
   const mock = options.mockBitrix ?? createMockBitrix(db);
   registerMockBitrix(app, mock);
   const proposals = createApprovalsService(db, mock);
   registerApprovals(app, proposals);
-  registerChat(app, createAgentService({ database: db, proposals, ...(options.agentModel ? { model: options.agentModel } : {}) }), {
+  const agentDependencies = { ...(options.agentModel ? { model: options.agentModel } : {}), ...(options.agentKbAnswer ? { kbAnswer: options.agentKbAnswer } : {}) };
+  registerChat(app, createAgentService({ database: db, proposals, ...agentDependencies }), {
     max: config.RATE_LIMIT_CHAT_MAX, timeWindow: config.RATE_LIMIT_WINDOW_MS, skip: skipGlobalRateLimit,
   });
+  const mcpAllowedOrigins = config.MCP_ALLOWED_ORIGINS?.split(',').map((origin) => origin.trim()).filter(Boolean) ?? [];
+  registerMcp(app, db, authConfig, proposals, {
+    max: config.RATE_LIMIT_MCP_MAX, timeWindow: config.RATE_LIMIT_WINDOW_MS, skip: skipGlobalRateLimit,
+  }, { allowedOrigins: mcpAllowedOrigins }, agentDependencies);
 
   app.addHook('onClose', closeDatabase);
   app.addHook('onClose', shutdownTracing);
