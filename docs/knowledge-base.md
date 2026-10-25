@@ -1,10 +1,10 @@
 # Knowledge base
 
-`kb/` contains ten short synthetic Markdown documents in Armenian and English. `05-manager-policy-en.md` allows only `sales_manager` and `admin`. Other examples explicitly allow all four roles. No real customer data is included.
+`kb/` has ten short synthetic Markdown documents, Armenian and English, no real customer data. `05-manager-policy-en.md` is `sales_manager`/`admin`-only; the rest allow all four roles.
 
 ## Configure and calibrate
 
-The required local `.env` and `.env.example` include:
+Required in `.env`:
 
 ```dotenv
 GOOGLE_GENERATIVE_AI_API_KEY=your-private-ai-studio-key
@@ -19,15 +19,13 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434/v1
 KB_REFUSAL_THRESHOLD=your-evaluated-number
 ```
 
-Replace quota placeholders with positive integers from your project's AI Studio limits; there are no defaults. Leave the threshold blank until evaluated. Answering requires an explicit threshold between -1 and 1; the check and ingestion do not. Tests require neither a Google key nor network access to Google.
+Quota placeholders need real positive integers from your AI Studio limits — no defaults. Leave the threshold blank until evaluated (answering requires one between -1 and 1; ingestion/checking don't). Tests need neither a Google key nor network access.
 
 ```sh
 npm run embed:check
 ```
 
-This makes live Google calls: five passage/query pairs per language, ten Armenian sentences and ten English. Passages use `RETRIEVAL_DOCUMENT`; queries use `RETRIEVAL_QUERY`. It prints returned dimension, every related/unrelated cosine score, and count/min/max/mean for each group/language. Confirm Armenian related scores clearly beat unrelated scores. Choose `KB_REFUSAL_THRESHOLD` using these results and representative actual KB questions; this diagnostic does not select it or guarantee answer quality.
-
-The exact options are `providerOptions: { google: { taskType, outputDimensionality: EMBED_DIM } }`; see the [Google provider documentation](https://ai-sdk.dev/providers/ai-sdk-providers/google). Vectors are validated and normalized. The chat model is local Ollama `gemma4:26b` through the shared model factory; embedding calls remain Google calls. Ollama needs no cloud key for answer generation. Switching only the chat model does not require re-embedding or changing the vector dimension.
+Makes live Google calls — five passage/query pairs per language (ten AM + ten EN sentences), passages as `RETRIEVAL_DOCUMENT`, queries as `RETRIEVAL_QUERY`. Prints dimension, every cosine score, and count/min/max/mean per group. Confirm Armenian related scores clearly beat unrelated ones, then pick `KB_REFUSAL_THRESHOLD` from these results plus representative real questions — this diagnostic informs the threshold, it doesn't set it. Chat itself runs on local Ollama (no cloud key); embeddings stay a separate Google call, unaffected by which chat provider is configured.
 
 ## Migrate and ingest
 
@@ -35,16 +33,14 @@ The exact options are `providerOptions: { google: { taskType, outputDimensionali
 docker compose up -d --wait postgres
 npm run db:migrate
 npm run db:seed
-npm run kb:ingest -- ./kb \
-  --tenant-id a0000000-0000-4000-8000-000000000001 \
-  --user-id a0000000-0000-4000-8000-000000000002
+npm run kb:ingest -- ./kb --tenant-id a0000000-0000-4000-8000-000000000001 --user-id a0000000-0000-4000-8000-000000000002
 ```
 
-Flags must identify an existing tenant admin. Ingestion uses `DATABASE_URL` as `app_user`, checks current memberships, and processes documents through `withTenant`. For Sevan Logistics run again using tenant/user IDs `b0000000-0000-4000-8000-000000000001` and `b0000000-0000-4000-8000-000000000002`. Documents are not ingested automatically.
+Flags must name an existing tenant admin; run again with `b0000000-...-000000000001`/`...002` for Sevan Logistics. Ingestion isn't automatic — run it per tenant. Runs as `app_user` through `withTenant`, checking current memberships.
 
-Output is `{ documents, skipped, embedded }`. Repeating unchanged ingestion produces `embedded: 0` and skips all documents. Changed chunks alone consume embeddings. Title/role changes update metadata without re-embedding unchanged text. Changing `EMBED_MODEL` re-embeds affected documents; search excludes other model versions. Removing a file does not remove its database document.
+Output: `{ documents, skipped, embedded }`. Re-running unchanged input gives `embedded: 0` (all skipped) — only changed chunks consume quota; title/role edits update metadata without re-embedding; changing `EMBED_MODEL` re-embeds and search excludes other model versions; deleting a file does *not* delete its DB document.
 
-Each top-level `.md` file requires this front matter. Filenames identify sources and must be unique within a tenant across ingested directories:
+Each top-level `.md` file needs front matter (filenames must be unique per tenant across ingested directories, symlinks aren't followed):
 
 ```markdown
 ---
@@ -55,33 +51,32 @@ allowed_roles: [admin, sales_manager]
 Synthetic text.
 ```
 
-Empty/unknown roles, malformed YAML, extra metadata keys, and titles containing citation delimiters are rejected. Symlinks are not followed. Chunks start at headings and target about 500 English tokens with a small overlap; byte-based estimates differ for Armenian. Each document, chunks, and audit event commit together; a failure rolls back that document while earlier documents remain committed.
+Empty/unknown roles, malformed YAML, extra keys, and citation-delimiter characters in the title are all rejected. Chunking starts at headings, targets ~500 English tokens with a small overlap (Armenian byte estimates differ). Each document + its chunks + an audit event commit together — a failed document rolls back while earlier ones in the same run stay committed.
 
-`EMBED_DIM` must match the committed `vector(1536)` migration and cannot exceed 2000. To change it, create a deliberate migration and regenerate vectors; editing `.env` alone is insufficient. Ingestion checks the database type before embedding and fails on API dimension mismatches.
+`EMBED_DIM` must match the committed `vector(1536)` migration (cap 2000) — changing it needs a real migration and re-embedding, not just an env edit. Ingestion checks the DB's vector type before spending quota and fails on a dimension mismatch.
 
 ## Search and answer
 
-These functions are called by the chat agent (`POST /chat`); there is no standalone KB HTTP endpoint:
+Called only from the chat agent (`POST /chat`) — no standalone HTTP endpoint:
 
 ```ts
 import { answerFromKb } from './src/rag/answer.js';
-
 const result = await answerFromKb(request.context, 'Ե՞րբ կարելի է ստեղծել հանձնարարություն։');
 // { answer, refused, citations: [{ chunkId, title, ordinal, source }] }
 ```
 
-`createKbSearch` accepts a vector from `embedder.embedQuery(question)` and returns up to five matches by default. SQL applies tenant, current database roles, document ACL, and embedding model before ordering/limiting. Exact cosine ordering avoids approximate-index candidate loss in this small corpus; the requested HNSW index is present for future tuning. Membership changes apply on the next search even with stale token/context roles.
+`createKbSearch` takes a query vector and returns up to 5 matches by default; SQL applies tenant + current roles + document ACL + embedding-model filter before ordering/limiting (exact cosine ordering — fine at this corpus size; an HNSW index exists for later tuning). Membership changes apply on the very next search even with a stale token.
 
-`answerFromKb` returns fixed Armenian/English refusal when no authorized evidence exists or the best score is below threshold, without calling the chat model. Answers require valid citations such as `[Հանձնարարության հաստատում §1]`; returned metadata includes source filenames. Missing/invented labels cause refusal. Source-label validation cannot prove every claim follows from its source. Retrieved text is explicitly delimited as untrusted data, and the model receives no executable tools.
+`answerFromKb` returns a fixed bilingual refusal — no chat call — when there's no authorized evidence or the best score is below threshold. Answers require valid citations like `[Հանձնարարության հաստատում §1]`; a missing/invented label causes refusal (this verifies citation *identity*, not that every claim actually follows from its source). Retrieved text is delimited as untrusted data; the answering call gets no executable tools.
 
 ## Quotas and verification
 
-Ignored `.cache/embedding-quota.json` holds model names, timestamps, counters, and conservative token estimates. Local processes coordinate through atomic reservations; counters survive restarts, include retries, and reset daily at midnight Pacific time. Each input counts conservatively as one request, with UTF-8 bytes plus overhead as the token budget. Processes must use this working directory for shared accounting. Calls on other hosts or through AI Studio are not tracked; Google's actual quota remains authoritative. See [Google's rate-limit documentation](https://ai.google.dev/gemini-api/docs/rate-limits).
+Ignored `.cache/embedding-quota.json` tracks per-model usage with atomic file-lock reservations, surviving restarts and resetting daily at midnight Pacific. Each input counts as one request, with UTF-8 bytes + overhead as a conservative token estimate — other hosts/AI-Studio-direct calls aren't tracked; Google's real quota stays authoritative ([rate-limit docs](https://ai.google.dev/gemini-api/docs/rate-limits)).
 
-429/5xx failures receive at most three total attempts with exponential backoff and Retry-After; other failures are immediate. Provider cooldowns over one minute are saved and surfaced for a later rerun. Exhausted daily quota fails immediately. Invalid JSON fails closed. After a crash while holding `.cache/embedding-quota.json.lock`, first ensure no embedding process is running, then remove only that stale lock directory and preserve the counter file.
+429/5xx get ≤3 attempts with backoff + Retry-After; other failures are immediate; exhausted daily quota fails immediately; invalid JSON fails closed. If a crash leaves a stale `.cache/embedding-quota.json.lock`, confirm nothing's running, then remove only that lock directory (keep the counter file).
 
 ```sh
 npx vitest run tests/embedding.test.ts tests/rag.test.ts
 ```
 
-Tests mock Google/chat responses and use disposable PostgreSQL for RLS, role ACLs before top-k, composite FKs, model isolation, incremental ingestion, dimension checks, citations/refusals, and quota/retry behavior. They do not establish live semantic quality or a calibrated threshold.
+Mocked Google/chat responses + disposable Postgres cover RLS, role ACLs before top-k, composite FKs, model isolation, incremental ingestion, dimension checks, citations/refusals, and quota/retry behavior — not live semantic quality or a calibrated threshold.

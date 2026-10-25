@@ -2,161 +2,106 @@
 
 ## Local startup and migrations
 
-The required `.env` contains `POSTGRES_DB`, `POSTGRES_PORT`, `POSTGRES_PASSWORD`, and `MIGRATION_DATABASE_URL`; `.env.example` includes local development values. Keep the URL's database, port, and password consistent with the Compose settings. `docker-compose.override.yml` (auto-merged locally) binds PostgreSQL to `127.0.0.1` for this host-side workflow; the base `docker-compose.yml` used for a real deployment does not publish it at all (see [docs/operations.md](operations.md)).
+Required `.env`: `POSTGRES_DB`, `POSTGRES_PORT`, `POSTGRES_PASSWORD`, `MIGRATION_DATABASE_URL` (keep the URL's DB/port/password consistent with Compose). `docker-compose.override.yml` (auto-merged locally) binds Postgres to `127.0.0.1` for host-side dev; the base `docker-compose.yml` used for real deployment doesn't publish it at all ([operations.md](operations.md)).
 
 ```sh
 docker compose up -d --wait postgres
 npm run db:migrate
 ```
 
-`docker/init.sql` runs only when PostgreSQL initializes an empty data directory. It enables `vector`, creates the two database roles, grants analytics-role membership, and sets the migration owner's default table privileges. It does not create application tables or seed records. PostgreSQL 18 persists data in the named volume mounted at `/var/lib/postgresql`.
+`docker/init.sql` runs only on an empty data directory: enables `vector`, creates the two roles, grants `analytics_ro` membership, sets the owner's default table privileges — no application tables or seed data. Postgres 18 persists under `/var/lib/postgresql`.
 
-`npm run db:generate` generates SQL from `src/db/schema/*.ts` without connecting to a database. Commit the SQL and Drizzle metadata in `drizzle/`. `npm run db:migrate` validates `MIGRATION_DATABASE_URL`, applies pending SQL as the owner, then executes `src/db/grants.ts` using the `sql` tag. This removes stale analytics table/column privileges on managed tables, derives column SELECT grants from Drizzle view definitions, and grants SELECT on the four views. Re-running the command preserves data and reapplies grants.
-
-The initial migration is forward-only, with no destructive down script. Use a new migration for subsequent changes. Stopping Compose with `docker compose down` preserves the database volume; tests own and dispose of separate containers.
+`npm run db:generate` builds SQL from `src/db/schema/*.ts` with no DB connection — commit it under `drizzle/`. `npm run db:migrate` validates `MIGRATION_DATABASE_URL`, applies pending SQL as the owner, then runs `src/db/grants.ts`: removes stale analytics privileges on managed tables, derives column SELECT grants from the Drizzle view definitions, and grants SELECT on the four views. Rerunning preserves data and reapplies grants. Forward-only, no destructive down script.
 
 ## Accounts and permissions
 
-`migration_owner` is the local image's bootstrap superuser and owns migrated objects. Its credentials are for migration tooling, not application queries. Bootstrap gives the separate `app_user` login `NOSUPERUSER`, `NOBYPASSRLS`, and default SELECT/INSERT/UPDATE/DELETE privileges on future owner-created tables in `public`.
+`migration_owner` is the bootstrap superuser, owns migrated objects, and is for migration tooling only. `app_user` (`NOSUPERUSER`/`NOBYPASSRLS`) gets default SELECT/INSERT/UPDATE/DELETE on future owner-created `public` tables. `analytics_ro` (`NOLOGIN`/`NOBYPASSRLS`) lets `app_user` `SET LOCAL ROLE` to it, with SELECT only on the four analytics views and their referenced base columns — no writes, no other tables. Bootstrap intentionally sets no `app_user` password; provision it interactively ([security.md](security.md)). The app uses `DATABASE_URL` (never `MIGRATION_DATABASE_URL`).
 
-`analytics_ro` has `NOLOGIN` and `NOBYPASSRLS`; membership lets `app_user` use `SET LOCAL ROLE analytics_ro` inside a transaction. It receives SELECT on the four analytics views and only the underlying columns their definitions reference, including joins and filters. It receives no writes or access to other application tables. Bootstrap intentionally does not set an `app_user` password; provision it interactively as described in [security.md](security.md). The application uses the separate `DATABASE_URL` naming `app_user`; never reuse `MIGRATION_DATABASE_URL` as the application credential.
-
-The `users`, `roles`, and `permissions` tables describe application RBAC; they are separate from these PostgreSQL roles. Users and permission definitions are not shared between tenants.
+`users`/`roles`/`permissions` tables implement application RBAC — separate from these Postgres roles, and never shared between tenants.
 
 ## Schema conventions
 
-All 23 tables have a generated UUID primary key and `created_at`/`updated_at` timestamps with time zones. Drizzle sets `updated_at` on updates; raw SQL must set it explicitly. All tables except `tenants` require `tenant_id` and have a unique `(tenant_id, id)` constraint. References to tenant-scoped rows use explicit composite foreign keys, for example `contacts(tenant_id, company_id)` to `companies(tenant_id, id)`. References to the root tenant use its primary key. Deletion uses PostgreSQL's restrictive default except document deletion cascades to its chunks.
-
-Nullable reference columns allow incomplete CRM records. Required references are marked below. UUIDs and timestamps are omitted from the table descriptions because they are common to all records.
+All 23 tables: generated UUID PK, `created_at`/`updated_at` (Drizzle sets `updated_at` on update; raw SQL must set it explicitly). Every table but `tenants` requires `tenant_id` plus a unique `(tenant_id, id)`; references to tenant-scoped rows use explicit composite FKs (e.g. `contacts(tenant_id, company_id)` → `companies(tenant_id, id)`). Deletion is Postgres's restrictive default, except document deletion cascades to chunks.
 
 | Table | Fields and relationships |
 | --- | --- |
 | `tenants` | Organization name. |
-| `users` | Name, email unique within the tenant, password hash. |
-| `roles` | Role name unique within the tenant. |
-| `permissions` | Permission code unique within the tenant, description. |
-| `role_permissions` | Required role and permission; one assignment per tenant/role/permission. |
-| `user_roles` | Required user and role; one assignment per tenant/user/role. |
-| `departments` | Department name unique within the tenant. |
-| `employees` | Name, optional department and user; a login maps to at most one employee per tenant. |
+| `users` | Name, email (unique per tenant), password hash. |
+| `roles` | Role name (unique per tenant). |
+| `permissions` | Permission code (unique per tenant), description. |
+| `role_permissions` | Role + permission, one per tenant/role/permission. |
+| `user_roles` | User + role, one per tenant/user/role. |
+| `departments` | Department name (unique per tenant). |
+| `employees` | Name, optional department/user (≤1 employee per login per tenant). |
 | `companies` | Customer organization name. |
-| `contacts` | Name, optional email, phone, company. |
-| `leads` | Title, optional company, contact, responsible employee. |
-| `deals` | Title, status, amount/currency, optional lost reason, closed time, company, contact, lead, responsible employee. |
-| `activities` | Type, occurred time, note, required contact, optional deal and employee. |
-| `tasks` | Title (nullable for legacy records), description, required assignee employee and deadline, status, optional contact and deal. New approved task writes require a title. |
-| `products` | Name, SKU unique within the tenant, price/currency. |
-| `orders` | Amount/currency, optional company, contact, deal. |
-| `order_items` | Required order and product, positive integer quantity, unit price/currency. |
-| `audit_logs` | Action, entity type, optional actor user and entity UUID, request UUID, JSON details containing event metadata; polymorphic entity UUIDs have no foreign key. Legacy/system rows may have no request UUID. |
-| `refresh_tokens` | Required user, SHA-256 token hash unique within the tenant, family UUID, absolute expiration time, optional used/revoked times; raw tokens are not stored. |
-| `pending_actions` | Required requester user, `task.create` type, object JSONB payload, status, attempts (0–3), nullable error/decision/execution timestamps, expiry defaulting to 24 hours after creation. The proposal UUID is its idempotency key. |
-| `sql_execution_log` | Required user/request UUIDs, nullable question, submitted SQL, verdict (`accepted`/`rejected`/`error`), returned rows (0–200), nonnegative duration in milliseconds, nullable safe error. Required composite reference to the tenant-local user. |
-| `documents` | Title, tenant-unique source filename, nonempty allowed role array, content hash, embedding model metadata; tenant RLS. |
-| `chunks` | Composite tenant/document FK with cascade, positive ordinal unique per document, text/content hash, non-null `vector(1536)`; tenant RLS. |
+| `contacts` | Name, optional email/phone/company. |
+| `leads` | Title, optional company/contact/responsible employee. |
+| `deals` | Title, status, amount/currency, optional lost reason/closed time/company/contact/lead/responsible employee. |
+| `activities` | Type, occurred time, note, required contact, optional deal/employee. |
+| `tasks` | Title (nullable for legacy rows — new approved writes require one), description, required assignee+deadline, status, optional contact/deal. |
+| `products` | Name, SKU (unique per tenant), price/currency. |
+| `orders` | Amount/currency, optional company/contact/deal. |
+| `order_items` | Required order+product, positive quantity, unit price/currency. |
+| `audit_logs` | Action, entity type, optional actor/entity UUID (polymorphic, no FK)/request UUID, JSON `details`. |
+| `refresh_tokens` | Required user, SHA-256 hash (unique per tenant), family UUID, expiry, optional used/revoked times — raw tokens never stored. |
+| `pending_actions` | Requester, `task.create` type, JSONB payload, status, attempts (0–3), nullable error/decision/execution timestamps, 24h default expiry. Its own UUID is the idempotency key. |
+| `sql_execution_log` | User+request UUIDs, nullable question, submitted SQL, verdict, row count (0–200), duration, nullable safe error. |
+| `documents` | Title, source filename (unique per tenant), nonempty `allowed_roles`, content hash, embedding-model metadata; tenant RLS. |
+| `chunks` | Composite tenant/document FK (cascade), ordinal (unique per document), text/content hash, `vector(1536)`; tenant RLS. |
 
-Deal statuses are `open`, `won`, `lost`; task statuses are `todo`, `in_progress`, `done`, `cancelled`; activity types are `call`, `email`, `meeting`. SQL CHECK constraints enforce these values. Leads and orders have no workflow status columns. Overdue tasks are derived using `due_at < now()` and `status IN ('todo', 'in_progress')`.
+Deal status: `open`/`won`/`lost`; task status: `todo`/`in_progress`/`done`/`cancelled`; activity type: `call`/`email`/`meeting` — all CHECK-constrained. Leads/orders have no status column. Overdue tasks: `due_at < now() AND status IN ('todo','in_progress')`. Money is `numeric(14,2)` (returned as a string to preserve precision); CHECKs reject negative amounts, bad 3-letter currency codes, and nonpositive quantities — totals/currency conversion aren't computed, writers must supply consistent values. Redacted analytics views exclude free-form lost-reason text.
 
-Money uses `numeric(14,2)` and is returned as a string by the driver to preserve decimal precision. SQL checks reject negative amounts, invalid three-uppercase-letter currency formats, and nonpositive quantities. Order totals and cross-record currency conversion are not computed or enforced in this initial schema; writers must supply consistent values. Deals retain lost-reason and closed-time fields without workflow transition enforcement; redacted analytics views exclude free-form lost reasons.
+Approval states: `pending`/`approved`/`executing`/`executed`/`failed`/`rejected`/`expired` (default `pending`, 0 attempts), CHECK-constrained along with payload shape. A proposal's UUID becomes its task's UUID — durable insert uniqueness with no extra key. The approval/mock *services* (not the schema) enforce permissions, transitions, expiry, and audit.
 
-Approval states are `pending`, `approved`, `executing`, `executed`, `failed`, `rejected`, and `expired`, with `pending` and zero attempts as defaults. CHECK constraints enforce the state/type values, attempt bounds, and object-shaped payload. Proposal UUIDs also become the IDs of tasks created by the executor, providing durable insert uniqueness without an extra key column or table. Independent identical proposals remain allowed. The approval and mock services validate task fields, enforce permissions and transitions, expire stale proposals on decision attempts, and audit state changes in their action transactions; the schema alone does not implement those rules.
+Migrations: the task-title one preserves legacy null titles; the approval-permission one idempotently grants its new codes to existing `admin`/`sales_manager`/`sales_rep` roles (excluding viewer) — tenants/roles created later need provisioning, there's no auto-seed.
 
-The task-title migration preserves existing records with null titles. The approval-permission data migration inserts tenant-local permission definitions and grants them to existing `admin`, `sales_manager`, and `sales_rep` roles. It is idempotent and excludes viewers. Tenants/roles created later must receive their grants during provisioning; migrations do not install an automatic account-seeding mechanism.
+## Indexes
 
-## Query indexes
+Query indexes:
 
-- `deals_tenant_status_created_at_idx` on `(tenant_id, status, created_at)` supports tenant-specific deal status and creation-date filtering.
-- `tasks_tenant_status_created_at_idx` on `(tenant_id, status, created_at)` supports tenant-specific task status and creation-date filtering.
-- `activities_tenant_contact_occurred_at_idx` on `(tenant_id, contact_id, occurred_at DESC)` supports latest contact activity and inactivity queries.
-- `tasks_tenant_due_at_idx` on `(tenant_id, due_at)` supports tenant-specific deadline ranges and overdue-task queries.
-- `refresh_tokens_tenant_family_idx` on `(tenant_id, family_id)` supports revoking every token in a tenant's refresh family.
+- `deals_tenant_status_created_at_idx` `(tenant_id, status, created_at)` — deal status/date filtering.
+- `tasks_tenant_status_created_at_idx` `(tenant_id, status, created_at)` — task status/date filtering.
+- `activities_tenant_contact_occurred_at_idx` `(tenant_id, contact_id, occurred_at DESC)` — latest-activity/inactivity queries.
+- `tasks_tenant_due_at_idx` `(tenant_id, due_at)` — deadline ranges, overdue tasks.
+- `refresh_tokens_tenant_family_idx` `(tenant_id, family_id)` — revoking a whole refresh family.
 
-## Constraint indexes
+Constraint indexes follow two generic patterns across all 23 tables (named `<table>_pkey` and `<table>_tenant_id_id_unique`): every table gets a `(id)` primary-key index, and every table except `tenants` additionally gets a `(tenant_id, id)` unique index backing composite tenant-scoped FKs. Beyond that generic pair, these columns carry their own uniqueness:
 
-PostgreSQL creates the following unique B-tree indexes for primary keys and unique constraints. Composite `(tenant_id, id)` indexes back tenant-scoped foreign-key targets even though UUID IDs are also globally unique within each table.
+- `users_tenant_email_unique` `(tenant_id, email)`
+- `roles_tenant_name_unique` `(tenant_id, name)`
+- `permissions_tenant_code_unique` `(tenant_id, code)`
+- `role_permissions_membership_unique` `(tenant_id, role_id, permission_id)`
+- `user_roles_membership_unique` `(tenant_id, user_id, role_id)`
+- `departments_tenant_name_unique` `(tenant_id, name)`
+- `employees_tenant_user_unique` `(tenant_id, user_id)` — null user links still allowed
+- `products_tenant_sku_unique` `(tenant_id, sku)`
+- `refresh_tokens_tenant_hash_unique` `(tenant_id, token_hash)`
 
-- `tenants_pkey` on `(id)` identifies tenant records.
-- `users_pkey` on `(id)` identifies user records.
-- `roles_pkey` on `(id)` identifies role records.
-- `permissions_pkey` on `(id)` identifies permission records.
-- `role_permissions_pkey` on `(id)` identifies role-permission assignments.
-- `user_roles_pkey` on `(id)` identifies user-role assignments.
-- `departments_pkey` on `(id)` identifies department records.
-- `employees_pkey` on `(id)` identifies employee records.
-- `companies_pkey` on `(id)` identifies company records.
-- `contacts_pkey` on `(id)` identifies contact records.
-- `leads_pkey` on `(id)` identifies lead records.
-- `deals_pkey` on `(id)` identifies deal records.
-- `activities_pkey` on `(id)` identifies activity records.
-- `tasks_pkey` on `(id)` identifies task records.
-- `products_pkey` on `(id)` identifies product records.
-- `orders_pkey` on `(id)` identifies order records.
-- `order_items_pkey` on `(id)` identifies order-item records.
-- `audit_logs_pkey` on `(id)` identifies audit records.
-- `refresh_tokens_pkey` on `(id)` identifies refresh-token records.
-- `pending_actions_pkey` on `(id)` identifies proposals and supplies their unique UUID idempotency keys.
-- `sql_execution_log_pkey` on `(id)` identifies analytical query execution records.
-- `users_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to users.
-- `roles_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to roles.
-- `permissions_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to permissions.
-- `role_permissions_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped assignment identity.
-- `user_roles_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped assignment identity.
-- `departments_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to departments.
-- `employees_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to employees.
-- `companies_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to companies.
-- `contacts_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to contacts.
-- `leads_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to leads.
-- `deals_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to deals.
-- `activities_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped activity identity.
-- `tasks_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped task identity.
-- `products_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to products.
-- `orders_tenant_id_id_unique` on `(tenant_id, id)` backs tenant-scoped references to orders.
-- `order_items_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped order-item identity.
-- `audit_logs_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped audit identity.
-- `refresh_tokens_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped token identity.
-- `pending_actions_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped proposal identity for composite references.
-- `sql_execution_log_tenant_id_id_unique` on `(tenant_id, id)` provides a tenant-scoped SQL execution identity.
-- `users_tenant_email_unique` on `(tenant_id, email)` prevents duplicate account emails within a tenant.
-- `roles_tenant_name_unique` on `(tenant_id, name)` prevents duplicate role names within a tenant.
-- `permissions_tenant_code_unique` on `(tenant_id, code)` prevents duplicate permission codes within a tenant.
-- `role_permissions_membership_unique` on `(tenant_id, role_id, permission_id)` prevents duplicate role-permission assignments.
-- `user_roles_membership_unique` on `(tenant_id, user_id, role_id)` prevents duplicate user-role assignments.
-- `departments_tenant_name_unique` on `(tenant_id, name)` prevents duplicate department names within a tenant.
-- `employees_tenant_user_unique` on `(tenant_id, user_id)` prevents multiple employees using the same login in one tenant; null user links remain allowed.
-- `products_tenant_sku_unique` on `(tenant_id, sku)` prevents duplicate product SKUs within a tenant.
-- `refresh_tokens_tenant_hash_unique` on `(tenant_id, token_hash)` prevents duplicate token hashes within a tenant.
+KB tables (see below) follow the same two generic patterns plus their own source/ordinal uniqueness.
 
 ## Analytics views
 
-`src/db/schema/analytics.ts` defines these `pgView` objects with `securityInvoker: true` and `securityBarrier: true`:
+`src/db/schema/analytics.ts` — `pgView` with `securityInvoker: true` + `securityBarrier: true`:
 
 | View | Contents |
 | --- | --- |
-| `v_deals` | Deal ID/tenant/title/status, amount/currency, creation/closure times, company/contact/responsible employee IDs, department ID. |
-| `v_tasks` | Task ID/tenant/title/status, assignee/department, deadline/creation times, contact/deal IDs. |
-| `v_contacts_activity` | Contact ID/tenant/name/company and `last_activity_at`, including contacts with no activities (NULL). Managers/reps see contacts linked to scoped deals. |
-| `v_employee_performance` | `employee_id`, tenant, `employee_name`, department, currency, `deal_count`, `open_count`, `won_count`, `lost_count`, and `won_amount`. Employees without deals have zero totals and NULL currency. |
+| `v_deals` | ID/tenant/title/status, amount/currency, created/closed times, company/contact/responsible-employee IDs, department. |
+| `v_tasks` | ID/tenant/title/status, assignee/department, deadline/created times, contact/deal IDs. |
+| `v_contacts_activity` | ID/tenant/name/company + `last_activity_at` (NULL if none). Managers/reps see only contacts linked to scoped deals. |
+| `v_employee_performance` | `employee_id`, tenant, name, department, currency, `deal_count`/`open_count`/`won_count`/`lost_count`, `won_amount` (zero/NULL currency if no deals). |
 
-Money is never summed across currencies within a performance row. No view exposes email, phone, activity note, task description, lost-reason text, login links, password hashes, tokens, or execution/audit metadata. Underlying column grants are discovered by walking each Drizzle view's SQL/column references, rather than maintaining a second list. Database tests independently compare those grants with PostgreSQL's recorded view dependencies.
-
-Tenant RLS applies to every underlying table. View predicates additionally require server-bound analytics scope: whole tenant, department, or employee. Missing scope settings fail closed. Column grants necessarily also permit direct reads of the granted base columns; the validator enforces the view-only query contract. See [security.md](security.md#guarded-sql-analytics) for the boundary.
+Never sums money across currencies in one row. No view exposes email, phone, notes, task descriptions, lost-reason text, login links, hashes, tokens, or audit/execution data. Column grants are derived by walking each view's own SQL (not a maintained second list); tests cross-check them against Postgres's recorded dependencies. Tenant RLS still applies underneath; view predicates additionally require server-bound scope (tenant/department/employee) — missing scope fails closed. See [security.md](security.md#guarded-sql-analytics) for the full boundary (granted base columns are still directly readable, which is expected and accepted).
 
 ## Database tests and current boundaries
 
-`npm test` requires a running Docker-compatible daemon. Testcontainers starts `pgvector/pgvector:pg18` on a dynamically allocated port, copies the same bootstrap SQL, applies the committed migration through the real CLI, and removes the disposable container afterward. No developer database is reset or reused. First-run image download may take longer than subsequent runs.
-
-Tests cover empty-database migrations, repeat migration runs, bootstrap roles and DML grants, role switching, cross-tenant foreign-key rejection in CRM and RBAC, mandatory tenant IDs, unique identifiers, status/type/money checks, and the four query indexes.
-
-All 22 tenant-scoped tables enable RLS with one tenant policy each, and authenticated application queries use transaction-local context through `withTenant`. Composite foreign keys additionally prevent cross-tenant references. Authentication uses a separate tenant-only transaction for credential lookup, then sets the verified user ID. JWT authentication, refresh rotation/reuse detection, RBAC, and transactional audit writing are implemented and tested through a real `app_user` connection. Approval tests cover database constraints, tenant/department authorization, concurrent/conflicting decisions, permission revalidation, three-attempt retry limits, timeout-after-write idempotency, expiry, rejection, and audit rollback. The mock reuses CRM tables inside the existing app. `npm run db:seed` creates deterministic synthetic CRM data through `withTenant` as `app_user`; [seed-scenarios.md](seed-scenarios.md) lists counts, accounts, and verified scenario results. Analytics tests cover the AST guard, exact grants, role scopes, logging, and a real five-second timeout. See [security.md](security.md) for security boundaries and [api.md](api.md) for endpoint contracts.
+`npm test` needs a running Docker daemon — Testcontainers spins up `pgvector/pgvector:pg18`, applies the real bootstrap + migration CLI, then disposes it; no developer database is touched. Coverage: empty-DB and repeat migrations, bootstrap roles/grants, role switching, cross-tenant FK rejection, mandatory tenant IDs, unique/status/money CHECKs, the five query indexes, all 22 tenant tables' single RLS policy via `withTenant`, JWT/refresh/RBAC/audit through a real `app_user` connection, approval constraints/authorization/concurrency/retries/expiry/rollback, deterministic seed generation ([seed-scenarios.md](seed-scenarios.md)), and the SQL guard's AST/grants/scopes/logging/real 5s timeout. See [security.md](security.md) and [api.md](api.md) for the security/endpoint contracts these tests back.
 
 ## Knowledge indexes
 
-- `documents_pkey` on `(id)` identifies a KB document.
-- `documents_tenant_id_id_unique` on `(tenant_id, id)` supports composite chunk foreign keys.
-- `documents_tenant_source_unique` on `(tenant_id, source)` prevents duplicate document sources and supports incremental lookup.
-- `chunks_pkey` on `(id)` identifies a retrieved passage.
-- `chunks_tenant_id_id_unique` on `(tenant_id, id)` supplies tenant-scoped chunk identity.
-- `chunks_document_ordinal_unique` on `(tenant_id, document_id, ordinal)` enforces passage order and supports document/chunk lookups.
-- `chunks_embedding_hnsw_idx` uses HNSW `vector_cosine_ops` for cosine search; current small-corpus retrieval uses exact ordering to avoid filtered approximate-candidate loss.
+- `documents_pkey` `(id)`, `documents_tenant_id_id_unique` `(tenant_id, id)` — identity, composite chunk FKs.
+- `documents_tenant_source_unique` `(tenant_id, source)` — no duplicate sources, supports incremental lookup.
+- `chunks_pkey` `(id)`, `chunks_tenant_id_id_unique` `(tenant_id, id)` — identity.
+- `chunks_document_ordinal_unique` `(tenant_id, document_id, ordinal)` — passage order, document/chunk lookup.
+- `chunks_embedding_hnsw_idx` — HNSW `vector_cosine_ops`; current small corpus uses exact ordering instead, to avoid filtered approximate-candidate loss.
 
-KB ingestion and retrieval enforce tenant RLS and role ACLs; see [knowledge-base.md](knowledge-base.md). Analytics grants exclude all document/chunk columns.
+KB ingestion/retrieval enforce tenant RLS and role ACLs — see [knowledge-base.md](knowledge-base.md). Analytics grants exclude every document/chunk column.
