@@ -89,7 +89,7 @@ sequenceDiagram
     T->>L: generate SQL from allowed view columns only
     L-->>T: candidate SQL
     T->>V: validate AST (read-only, allow-listed relations/functions)
-    V->>DB: SET LOCAL ROLE analytics_ro; run with 5s timeout, LIMIT 200
+    V->>DB: SET LOCAL ROLE analytics_ro, run with 5s timeout, LIMIT 200
     DB-->>V: rows
     V-->>T: rows + accepted SQL
     T-->>G: bounded result (<=8000 UTF-8 bytes, marked untrusted)
