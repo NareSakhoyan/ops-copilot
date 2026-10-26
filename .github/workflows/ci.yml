@@ -17,6 +17,10 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      # src/config.ts's loadEnvironment() requires a .env file to exist even though process env
+      # always overrides its contents (see docs/decisions.md "Configuration"); reuse the same
+      # empty file the Docker image satisfies this with, since the runner has no real secrets.
+      - run: cp docker/container.env .env
       # Integration tests spin up disposable PostgreSQL 18 pgvector containers themselves via
       # Testcontainers (see docs/decisions.md "Database foundation"); GitHub-hosted runners
       # already have Docker available, so no separate `services:` Postgres container is needed.
