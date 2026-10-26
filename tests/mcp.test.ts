@@ -265,7 +265,7 @@ describe('kb_search ACL over MCP', () => {
   afterAll(async () => { if (directory) await rm(directory, { recursive: true, force: true }); });
 
   it('refuses a rep but answers a manager for the same manager-only document', async () => {
-    const kbAnswer = createKbAnswerer({ database: client, embedder: new FakeEmbedder(), llm: () => Promise.resolve('Budgets are confidential. [Manager policy §1]') });
+    const kbAnswer = createKbAnswerer({ database: client, embedder: new FakeEmbedder(), llm: () => Promise.resolve('Budgets are confidential. [Manager policy §1]'), threshold: 0 });
     const app = trackApp(buildApp(parseConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent' }), undefined, { authConfig, database: client, agentKbAnswer: kbAnswer }));
     const question = { question: 'confidential salary budget review' };
 
